@@ -1,0 +1,51 @@
+# Local settings with secrets (DingTalk keys, webhooks)
+config.json
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.pip-cache/
+
+# Packaged builds
+build/
+dist/
+
+# YOLO weights and Ultralytics local data
+Download/
+*.pt
+*.pt.part
+
+# Alert screenshots generated at runtime
+Pic/*.png
+Pic/*.jpg
+Pic/*.jpeg
+Pic/*.bmp
+Pic/*.webp
+Pic/FalsePositive/*
+!Pic/.gitkeep
+!Pic/FalsePositive/.gitkeep
+
+# Test videos and other media that are not source
+/测试视频/
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv
+*.flv
+*.webm
+*.mpeg
+*.mpg
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+Thumbs.db
+Desktop.ini
+.DS_Store

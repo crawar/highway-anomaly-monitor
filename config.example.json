@@ -1,0 +1,21 @@
+{
+  "interval_sec": 1.0,
+  "show_labels": true,
+  "hide_low_conf": true,
+  "parking_conf": 0.41,
+  "intrusion_conf": 0.41,
+  "intrusion_alert": true,
+  "parking_alert": true,
+  "voice_alert": true,
+  "auto_open_list": false,
+  "demo_record": false,
+  "cooldown_sec": 30,
+  "parking_hold_sec": 4,
+  "parking_grace_frames": 2,
+  "ding_alert": false,
+  "ding_keyword": "",
+  "ding_secret": "",
+  "ding_webhook": "",
+  "ding_app_key": "",
+  "ding_app_secret": ""
+}
