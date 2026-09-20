@@ -5,8 +5,21 @@ cd /d "%~dp0"
 if /I "%~1"=="nopause" set "SKIP_PAUSE=1"
 
 set "PY=%~dp0.venv\Scripts\python.exe"
-set "OUT=%~dp0dist\CarFind"
 set "WEIGHTS=%~dp0Download\yolo26l.pt"
+
+:: Version comes from app\__init__.py (VERSION = "V1.1.1"); the package folder
+:: is dist\CarFind-<version> so several versions can sit side by side.
+set "VER="
+for /f "tokens=2 delims==" %%v in ('findstr /b /c:"VERSION" "%~dp0app\__init__.py"') do set "VER=%%v"
+set "VER=%VER: =%"
+set "VER=%VER:"=%"
+if not defined VER (
+    echo Could not read VERSION from app\__init__.py
+    if not defined SKIP_PAUSE pause
+    exit /b 1
+)
+set "NAME=CarFind-%VER%"
+set "OUT=%~dp0dist\%NAME%"
 
 if not exist "%PY%" (
     echo Virtual environment not found: .venv\Scripts\python.exe
@@ -48,12 +61,12 @@ if errorlevel 1 (
 )
 
 echo.
-echo Discarding previous dist and build folders ...
+echo Discarding previous build folder and dist\%NAME% (other versions are kept) ...
 if exist "%~dp0build" rmdir /s /q "%~dp0build"
-if exist "%~dp0dist" rmdir /s /q "%~dp0dist"
+if exist "%OUT%" rmdir /s /q "%OUT%"
 
 echo.
-echo Building CarFind V1.0.2 onedir package. This can take several minutes ...
+echo Building %NAME% onedir package. This can take several minutes ...
 "%PY%" -m PyInstaller --noconfirm --clean "%~dp0CarFind.spec"
 if errorlevel 1 (
     echo PyInstaller build failed.
@@ -62,7 +75,7 @@ if errorlevel 1 (
 )
 
 if not exist "%OUT%\CarFind.exe" (
-    echo Build finished but CarFind.exe was not found in dist\CarFind
+    echo Build finished but CarFind.exe was not found in dist\%NAME%
     if not defined SKIP_PAUSE pause
     exit /b 1
 )
@@ -73,6 +86,7 @@ if not exist "%OUT%\Download" mkdir "%OUT%\Download"
 if not exist "%OUT%\warning" mkdir "%OUT%\warning"
 if not exist "%OUT%\Pic" mkdir "%OUT%\Pic"
 if not exist "%OUT%\Pic\FalsePositive" mkdir "%OUT%\Pic\FalsePositive"
+if not exist "%OUT%\logs" mkdir "%OUT%\logs"
 
 copy /Y "%WEIGHTS%" "%OUT%\Download\yolo26l.pt" >nul
 if errorlevel 1 (
@@ -97,7 +111,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo Package ready: CarFind V1.0.2
+echo Package ready: %NAME%
 echo   %OUT%\CarFind.exe
 echo Folder contents include:
 echo   CarFind.exe
@@ -106,7 +120,8 @@ echo   config.json
 echo   Download\yolo26l.pt
 echo   warning\
 echo   Pic\
+echo   logs\   (diagnostic logs are written here at runtime)
 echo.
-echo Copy the whole dist\CarFind folder to another PC. Do not copy only the exe.
+echo Copy the whole dist\%NAME% folder to another PC. Do not copy only the exe.
 if not defined SKIP_PAUSE pause
 exit /b 0

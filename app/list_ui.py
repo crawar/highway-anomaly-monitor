@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QGuiApplication,
@@ -21,11 +23,13 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QPolygonF,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
 
 from app import theme as T
+from app.config import load_settings
 from app.hud import _paint_metal_panel, _ui_font
 from app.paths import ensure_false_positive_dir, ensure_pic_dir
 from app.win32util import apply_capture_affinity, disable_system_rounding
@@ -160,7 +164,7 @@ class AlertRow(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         pos = event.position().toPoint()
-        if self._view_rect().contains(pos):
+        if self._view_rect().contains(pos) or self._thumb_rect().contains(pos):
             hover = "view"
         elif self._false_rect().contains(pos):
             hover = "false"
@@ -184,7 +188,7 @@ class AlertRow(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
-            if self._view_rect().contains(pos):
+            if self._view_rect().contains(pos) or self._thumb_rect().contains(pos):
                 self.view_clicked.emit(self._record)
                 event.accept()
                 return
@@ -259,8 +263,24 @@ class AlertRow(QWidget):
             )
 
 
+_ZOOM_MIN = 0.25
+_ZOOM_MAX = 4.0
+_ZOOM_STEP = 1.1
+_CHROME_TOP = 52
+_CHROME_SIDE = 16
+_CHROME_BOTTOM = 16
+_BTN_Y = 12
+_BTN_SIZE = 28
+_GUIDANCE_DELAY_MS = 1000
+_GUIDANCE_ZOOM_SEC = 2.0
+_GUIDANCE_FLASH_SEC = 5.0
+_GUIDANCE_TICK_MS = 40
+
+
 class ImagePeek(QWidget):
     """Owned always-on-top preview so the photo stays above the list."""
+
+    closed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -275,37 +295,242 @@ class ImagePeek(QWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._chrome_ready = False
-        self._pixmap = QPixmap()
+        self._records: list[AlertRecord] = []
+        self._index = 0
+        self._source = QPixmap()
+        self._scaled = QPixmap()
+        self._fit_w = 1
+        self._fit_h = 1
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._auto_opened = False
+        self._silent = False
+        self._dragging = False
+        self._drag_pos = QPoint()
+        self._pan_origin = (0.0, 0.0)
         self._hover = ""
+        self._alert_boxes: list[QRectF] = []
+        self._guidance_mode = ""
+        self._guidance_epoch = 0.0
+        self._guidance_start_pan = (0.0, 0.0)
+        self._guidance_final_pan = (0.0, 0.0)
+        self._guidance_delay = QTimer(self)
+        self._guidance_delay.setSingleShot(True)
+        self._guidance_delay.setInterval(_GUIDANCE_DELAY_MS)
+        self._guidance_delay.timeout.connect(self._begin_guidance)
+        self._guidance_tick = QTimer(self)
+        self._guidance_tick.setInterval(_GUIDANCE_TICK_MS)
+        self._guidance_tick.timeout.connect(self._on_guidance_tick)
 
-    def show_image(self, path: Path, anchor: QRect) -> None:
-        image = QImage(str(path))
+    def show_records(
+        self,
+        records: list[AlertRecord],
+        index: int,
+        anchor: QRect,
+        auto_opened: bool = False,
+    ) -> None:
+        self._records = list(records)
+        if not self._records:
+            self.hide()
+            return
+        self._index = max(0, min(int(index), len(self._records) - 1))
+        self._auto_opened = bool(auto_opened)
+        self._load_current(anchor)
+
+    def dismiss(self) -> None:
+        self._auto_opened = False
+        self._silent = True
+        self.hide()
+        self._silent = False
+
+    def hideEvent(self, event) -> None:
+        self._cancel_guidance()
+        self._dragging = False
+        auto = bool(self._auto_opened)
+        self._auto_opened = False
+        if not self._silent:
+            self.closed.emit(auto)
+        super().hideEvent(event)
+
+    def _load_current(self, anchor: QRect) -> None:
+        self._cancel_guidance()
+        record = self._records[self._index]
+        image = QImage(str(record.path))
         if image.isNull():
             self.hide()
             return
+        self._alert_boxes = self._read_alert_boxes(image)
         screen = QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()
         geo = screen.availableGeometry() if screen is not None else QRect(0, 0, 1280, 720)
-        max_w = max(160, int(geo.width() * 0.86) - 32)
-        max_h = max(120, int(geo.height() * 0.86) - 48)
-        pix = QPixmap.fromImage(image)
-        if pix.width() > max_w or pix.height() > max_h:
-            pix = pix.scaled(
+        max_w = max(160, int(geo.width() * 0.86) - _CHROME_SIDE * 2)
+        max_h = max(120, int(geo.height() * 0.86) - _CHROME_TOP - _CHROME_BOTTOM)
+        source = QPixmap.fromImage(image)
+        self._source = source
+        if source.width() > max_w or source.height() > max_h:
+            fit = source.scaled(
                 max_w,
                 max_h,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-        self._pixmap = pix
-        width = pix.width() + 32
-        height = pix.height() + 48
+        else:
+            fit = source
+        self._fit_w = max(1, fit.width())
+        self._fit_h = max(1, fit.height())
+        self._zoom = 1.0
+        self._scaled = QPixmap()
+        width = max(300, self._fit_w + _CHROME_SIDE * 2)
+        width = min(width, geo.width())
+        height = self._fit_h + _CHROME_TOP + _CHROME_BOTTOM
         x = geo.x() + (geo.width() - width) // 2
         y = geo.y() + (geo.height() - height) // 2
         self.setGeometry(x, y, width, height)
+        self._rebuild_scaled()
+        self._clamp_pan()
         self.show()
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
         self.update()
+        if load_settings().gaze_guidance and self._alert_boxes:
+            self._guidance_delay.start()
+
+    def _read_alert_boxes(self, image: QImage) -> list[QRectF]:
+        raw = image.text(T.ALERT_BOX_METADATA_KEY)
+        if not raw:
+            return []
+        try:
+            values = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        boxes: list[QRectF] = []
+        if not isinstance(values, list):
+            return boxes
+        for value in values:
+            if not isinstance(value, list) or len(value) != 4:
+                continue
+            try:
+                x, y, w, h = (float(part) for part in value)
+            except (TypeError, ValueError):
+                continue
+            if w > 0.0 and h > 0.0:
+                boxes.append(QRectF(x, y, w, h))
+        return boxes
+
+    def _cancel_guidance(self) -> None:
+        self._guidance_delay.stop()
+        self._guidance_tick.stop()
+        if self._guidance_mode:
+            self._guidance_mode = ""
+            self.update()
+
+    def _begin_guidance(self) -> None:
+        if not self.isVisible() or not self._alert_boxes:
+            return
+        self._guidance_epoch = time.monotonic()
+        if len(self._alert_boxes) == 1:
+            box = self._alert_boxes[0]
+            content = self._content_rect()
+            sx = self._fit_w / max(1, self._source.width())
+            sy = self._fit_h / max(1, self._source.height())
+            target_zoom = 2.0
+            desired_x = content.width() / 2.0 - box.center().x() * sx * target_zoom
+            desired_y = content.height() / 2.0 - box.center().y() * sy * target_zoom
+            self._guidance_start_pan = (self._pan_x, self._pan_y)
+            self._guidance_final_pan = self._clamped_pan(
+                target_zoom, desired_x, desired_y
+            )
+            self._guidance_mode = "zoom"
+        else:
+            self._guidance_mode = "circles"
+        self._guidance_tick.start()
+        self.update()
+
+    def _on_guidance_tick(self) -> None:
+        elapsed = max(0.0, time.monotonic() - self._guidance_epoch)
+        if self._guidance_mode == "zoom":
+            t = min(1.0, elapsed / _GUIDANCE_ZOOM_SEC)
+            eased = t * t * (3.0 - 2.0 * t)
+            self._zoom = 1.0 + eased
+            self._pan_x = self._guidance_start_pan[0] + (
+                self._guidance_final_pan[0] - self._guidance_start_pan[0]
+            ) * eased
+            self._pan_y = self._guidance_start_pan[1] + (
+                self._guidance_final_pan[1] - self._guidance_start_pan[1]
+            ) * eased
+            self._rebuild_scaled()
+            self._clamp_pan()
+            if t >= 1.0:
+                self._zoom = 2.0
+                self._pan_x, self._pan_y = self._guidance_final_pan
+                self._rebuild_scaled()
+                self._clamp_pan()
+                self._guidance_mode = ""
+                self._guidance_tick.stop()
+        elif self._guidance_mode == "circles":
+            if elapsed >= _GUIDANCE_FLASH_SEC:
+                self._guidance_mode = ""
+                self._guidance_tick.stop()
+        else:
+            self._guidance_tick.stop()
+        self.update()
+
+    def _step(self, delta: int) -> None:
+        nxt = self._index + delta
+        if nxt < 0 or nxt >= len(self._records):
+            return
+        self._index = nxt
+        self._load_current(self.frameGeometry())
+
+    def _content_rect(self) -> QRect:
+        return QRect(
+            _CHROME_SIDE,
+            _CHROME_TOP,
+            max(1, self.width() - _CHROME_SIDE * 2),
+            max(1, self.height() - _CHROME_TOP - _CHROME_BOTTOM),
+        )
+
+    def _rebuild_scaled(self) -> None:
+        if self._source.isNull():
+            self._scaled = QPixmap()
+            return
+        tw = max(1, int(round(self._fit_w * self._zoom)))
+        th = max(1, int(round(self._fit_h * self._zoom)))
+        if self._scaled.width() == tw and self._scaled.height() == th:
+            return
+        self._scaled = self._source.scaled(
+            tw,
+            th,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def _can_pan(self) -> bool:
+        if self._zoom <= 1.0 + 1e-6:
+            return False
+        content = self._content_rect()
+        return self._scaled.width() > content.width() or self._scaled.height() > content.height()
+
+    def _clamp_pan(self) -> None:
+        self._pan_x, self._pan_y = self._clamped_pan(
+            self._zoom, self._pan_x, self._pan_y
+        )
+
+    def _clamped_pan(self, zoom: float, pan_x: float, pan_y: float) -> tuple[float, float]:
+        content = self._content_rect()
+        sw = max(1, int(round(self._fit_w * zoom)))
+        sh = max(1, int(round(self._fit_h * zoom)))
+        cw, ch = content.width(), content.height()
+        if sw <= cw:
+            pan_x = (cw - sw) / 2.0
+        else:
+            pan_x = min(0.0, max(float(cw - sw), pan_x))
+        if sh <= ch:
+            pan_y = (ch - sh) / 2.0
+        else:
+            pan_y = min(0.0, max(float(ch - sh), pan_y))
+        return pan_x, pan_y
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -315,8 +540,75 @@ class ImagePeek(QWidget):
         apply_capture_affinity(self)
 
     def _btn_close(self) -> QRect:
-        size = 28
-        return QRect(self.width() - 14 - size, 10, size, size)
+        return QRect(self.width() - 14 - _BTN_SIZE, _BTN_Y, _BTN_SIZE, _BTN_SIZE)
+
+    def _btn_down(self) -> QRect:
+        close = self._btn_close()
+        return QRect(close.x() - 8 - _BTN_SIZE, close.y(), _BTN_SIZE, _BTN_SIZE)
+
+    def _btn_up(self) -> QRect:
+        down = self._btn_down()
+        return QRect(down.x() - 8 - _BTN_SIZE, down.y(), _BTN_SIZE, _BTN_SIZE)
+
+    def _btn_reset(self) -> QRect:
+        return QRect(_CHROME_SIDE + 72, _BTN_Y, 82, _BTN_SIZE)
+
+    def _reset_zoom(self) -> None:
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._rebuild_scaled()
+        self._clamp_pan()
+        self.update()
+
+    def _has_prev(self) -> bool:
+        return self._index > 0
+
+    def _has_next(self) -> bool:
+        return self._index + 1 < len(self._records)
+
+    def _paint_circle_btn(self, p: QPainter, rect: QRect, hover: bool, enabled: bool) -> QRectF:
+        body = QRectF(rect)
+        fill = QLinearGradient(body.topLeft(), body.bottomLeft())
+        if not enabled:
+            fill.setColorAt(0.0, QColor(48, 50, 54))
+            fill.setColorAt(1.0, QColor(22, 24, 26))
+        elif hover:
+            fill.setColorAt(0.0, QColor(92, 98, 108))
+            fill.setColorAt(1.0, QColor(38, 41, 46))
+        else:
+            fill.setColorAt(0.0, QColor(72, 76, 84))
+            fill.setColorAt(1.0, QColor(28, 30, 34))
+        p.setPen(QPen(T.WINDOW_RIM, 1.0))
+        p.setBrush(fill)
+        p.drawEllipse(body)
+        return body
+
+    def _paint_triangle(self, p: QPainter, rect: QRect, up: bool, hover: bool, enabled: bool) -> None:
+        body = self._paint_circle_btn(p, rect, hover, enabled)
+        inset = 8.0
+        cx = body.center().x()
+        if up:
+            pts = [
+                QPointF(cx, body.top() + inset),
+                QPointF(body.left() + inset, body.bottom() - inset),
+                QPointF(body.right() - inset, body.bottom() - inset),
+            ]
+        else:
+            pts = [
+                QPointF(cx, body.bottom() - inset),
+                QPointF(body.left() + inset, body.top() + inset),
+                QPointF(body.right() - inset, body.top() + inset),
+            ]
+        if not enabled:
+            color = T.SETTINGS_MUTED
+        elif hover:
+            color = T.SETTINGS_TEXT
+        else:
+            color = T.ICON_SILVER
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        p.drawPolygon(QPolygonF(pts))
 
     def _paint_close_x(self, p: QPainter, rect: QRect, hover: bool) -> None:
         body = QRectF(rect)
@@ -347,52 +639,208 @@ class ImagePeek(QWidget):
             int(body.bottom() - inset),
         )
 
+    def _cursor_for(self, pos: QPoint):
+        if self._btn_close().contains(pos):
+            return Qt.CursorShape.PointingHandCursor
+        if self._btn_up().contains(pos) and self._has_prev():
+            return Qt.CursorShape.PointingHandCursor
+        if self._btn_down().contains(pos) and self._has_next():
+            return Qt.CursorShape.PointingHandCursor
+        if self._btn_reset().contains(pos):
+            return Qt.CursorShape.PointingHandCursor
+        if self._can_pan() and self._content_rect().contains(pos):
+            return Qt.CursorShape.OpenHandCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._cancel_guidance()
+            pos = event.position().toPoint()
+            if (
+                self._btn_close().contains(pos)
+                or self._btn_up().contains(pos)
+                or self._btn_down().contains(pos)
+                or self._btn_reset().contains(pos)
+            ):
+                event.accept()
+                return
+            if self._can_pan() and self._content_rect().contains(pos):
+                self._dragging = True
+                self._drag_pos = pos
+                self._pan_origin = (self._pan_x, self._pan_y)
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        hover = "close" if self._btn_close().contains(event.position().toPoint()) else ""
+        pos = event.position().toPoint()
+        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
+            delta = pos - self._drag_pos
+            self._pan_x = self._pan_origin[0] + delta.x()
+            self._pan_y = self._pan_origin[1] + delta.y()
+            self._clamp_pan()
+            self.update()
+            event.accept()
+            return
+        hover = ""
+        if self._btn_close().contains(pos):
+            hover = "close"
+        elif self._btn_up().contains(pos) and self._has_prev():
+            hover = "up"
+        elif self._btn_down().contains(pos) and self._has_next():
+            hover = "down"
+        elif self._btn_reset().contains(pos):
+            hover = "reset"
+        self.setCursor(self._cursor_for(pos))
         if hover != self._hover:
             self._hover = hover
-            self.setCursor(
-                Qt.CursorShape.PointingHandCursor if hover else Qt.CursorShape.ArrowCursor
-            )
             self.update()
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event) -> None:
         if self._hover:
             self._hover = ""
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+            if not self._dragging:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            if self._btn_close().contains(event.position().toPoint()):
+            pos = event.position().toPoint()
+            if self._dragging:
+                self._dragging = False
+                self.setCursor(self._cursor_for(pos))
+                event.accept()
+                return
+            if self._btn_close().contains(pos):
                 self.hide()
+                event.accept()
+                return
+            if self._btn_up().contains(pos):
+                self._step(-1)
+                event.accept()
+                return
+            if self._btn_down().contains(pos):
+                self._step(1)
+                event.accept()
+                return
+            if self._btn_reset().contains(pos):
+                self._reset_zoom()
                 event.accept()
                 return
         super().mouseReleaseEvent(event)
 
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if self._source.isNull():
+            return
+        self._cancel_guidance()
+        dy = event.angleDelta().y()
+        if dy == 0:
+            event.accept()
+            return
+        steps = dy / 120.0
+        old = self._zoom
+        new = max(_ZOOM_MIN, min(_ZOOM_MAX, old * (_ZOOM_STEP ** steps)))
+        if abs(new - 1.0) < 0.03:
+            new = 1.0
+        if abs(new - old) < 1e-6:
+            event.accept()
+            return
+        content = self._content_rect()
+        pos = event.position()
+        cx = pos.x() - content.x()
+        cy = pos.y() - content.y()
+        fit_x = (cx - self._pan_x) / old if old else 0.0
+        fit_y = (cy - self._pan_y) / old if old else 0.0
+        self._zoom = new
+        self._pan_x = cx - fit_x * new
+        self._pan_y = cy - fit_y * new
+        self._rebuild_scaled()
+        self._clamp_pan()
+        self.setCursor(self._cursor_for(event.position().toPoint()))
+        self.update()
+        event.accept()
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        self._cancel_guidance()
         if event.key() == Qt.Key.Key_Escape:
             self.hide()
             event.accept()
             return
+        if event.key() == Qt.Key.Key_PageUp:
+            self._step(-1)
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_PageDown:
+            self._step(1)
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    def _paint_guidance_circles(self, p: QPainter, content: QRect) -> None:
+        if self._guidance_mode != "circles" or self._source.isNull():
+            return
+        elapsed = max(0.0, time.monotonic() - self._guidance_epoch)
+        if int(elapsed / 0.5) % 2 != 0:
+            return
+        sx = self._fit_w / max(1, self._source.width()) * self._zoom
+        sy = self._fit_h / max(1, self._source.height()) * self._zoom
+        pen = QPen(T.BOX_ALERT, 3.0)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for box in self._alert_boxes:
+            cx = content.x() + self._pan_x + box.center().x() * sx
+            cy = content.y() + self._pan_y + box.center().y() * sy
+            bw = box.width() * sx
+            bh = box.height() * sy
+            diameter = max(18.0, (bw * bw + bh * bh) ** 0.5 * 1.12)
+            p.drawEllipse(
+                QRectF(
+                    cx - diameter / 2.0,
+                    cy - diameter / 2.0,
+                    diameter,
+                    diameter,
+                )
+            )
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         body = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
         _paint_metal_panel(p, body, 16.0)
-        if not self._pixmap.isNull():
-            x = (self.width() - self._pixmap.width()) // 2
-            y = 36 + (self.height() - 48 - self._pixmap.height()) // 2
-            p.drawPixmap(x, y, self._pixmap)
+        content = self._content_rect()
+        p.save()
+        p.setClipRect(content)
+        if not self._scaled.isNull():
+            p.drawPixmap(int(content.x() + self._pan_x), int(content.y() + self._pan_y), self._scaled)
+        self._paint_guidance_circles(p, content)
+        p.restore()
+        p.setPen(T.SETTINGS_TEXT)
+        p.setFont(_ui_font(12))
+        p.drawText(
+            QRect(_CHROME_SIDE, _BTN_Y, 72, _BTN_SIZE),
+            Qt.AlignmentFlag.AlignVCenter,
+            f"{int(round(self._zoom * 100))}%",
+        )
+        _paint_metal_button(
+            p,
+            self._btn_reset(),
+            "复原缩放",
+            self._hover == "reset",
+            abs(self._zoom - 1.0) > 1e-6,
+        )
+        self._paint_triangle(p, self._btn_up(), True, self._hover == "up", self._has_prev())
+        self._paint_triangle(p, self._btn_down(), False, self._hover == "down", self._has_next())
         self._paint_close_x(p, self._btn_close(), self._hover == "close")
 
 
 class AlertListWindow(QWidget):
-    closed = Signal(bool)
+    closed = Signal()
+    stats_requested = Signal()
+    peek_closed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -409,13 +857,13 @@ class AlertListWindow(QWidget):
         self.setMinimumSize(T.LIST_MIN_W, T.LIST_MIN_H)
         self._chrome_ready = False
         self._hover = ""
-        self.resume_after_close = True
         self._records: list[AlertRecord] = []
         self._rows: list[AlertRow] = []
         self._page = 0
         self._shown_keys: list[str] = []
         self._placed = False
-        self._peek = ImagePeek(self)
+        self._peek = ImagePeek(parent)
+        self._peek.closed.connect(self.peek_closed.emit)
 
     def show_at(self, anchor: QRect) -> None:
         if not self.isVisible():
@@ -488,7 +936,41 @@ class AlertListWindow(QWidget):
             y += T.LIST_ROW_H
 
     def _open_image(self, record: AlertRecord) -> None:
-        self._peek.show_image(record.path, self.frameGeometry())
+        self._peek.show_records(
+            self._records,
+            self._index_of(record),
+            self.frameGeometry(),
+            auto_opened=False,
+        )
+
+    def _index_of(self, record: AlertRecord) -> int:
+        for i, item in enumerate(self._records):
+            if item.path == record.path:
+                return i
+        return 0
+
+    def open_saved_image(self, path: Path, anchor: QRect) -> None:
+        self._records = load_records()
+        index = 0
+        target = path
+        try:
+            target = path.resolve()
+        except OSError:
+            pass
+        for i, rec in enumerate(self._records):
+            same = rec.path == path or rec.path.name == path.name
+            if not same:
+                try:
+                    same = rec.path.resolve() == target
+                except OSError:
+                    same = False
+            if same:
+                index = i
+                break
+        self._peek.show_records(self._records, index, anchor, auto_opened=True)
+
+    def dismiss_peek(self) -> None:
+        self._peek.dismiss()
 
     def _mark_false_positive(self, record: AlertRecord) -> None:
         src = record.path
@@ -513,11 +995,21 @@ class AlertListWindow(QWidget):
         except OSError:
             pass
 
-    def _close_list(self) -> None:
-        resume = bool(self.resume_after_close)
-        self._peek.hide()
+    def _open_stats(self) -> None:
+        self.dismiss_peek()
         self.hide()
-        self.closed.emit(resume)
+        self.stats_requested.emit()
+
+    def reveal(self) -> None:
+        self._reload()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _close_list(self) -> None:
+        self.dismiss_peek()
+        self.hide()
+        self.closed.emit()
 
     def _turn_page(self, delta: int) -> None:
         nxt = self._page + delta
@@ -541,17 +1033,12 @@ class AlertListWindow(QWidget):
         size = 28
         return QRect(self.width() - 16 - size, (T.LIST_HEADER_H - size) // 2, size, size)
 
-    def _check_box(self) -> QRect:
-        close = self._btn_close()
-        return QRect(close.x() - 12 - 132 - 8 - 18, (T.LIST_HEADER_H - 18) // 2, 18, 18)
-
-    def _check_hit(self) -> QRect:
-        box = self._check_box()
-        close = self._btn_close()
-        return QRect(box.x() - 4, 8, close.x() - box.x() - 8, T.LIST_HEADER_H - 16)
-
     def _btn_folder(self) -> QRect:
         return QRect(28, self.height() - 54, 132, 34)
+
+    def _btn_stats(self) -> QRect:
+        folder = self._btn_folder()
+        return QRect(folder.right() + 12, folder.y(), 132, 34)
 
     def _btn_next(self) -> QRect:
         return QRect(self.width() - 28 - 72, self.height() - 54, 72, 34)
@@ -567,7 +1054,7 @@ class AlertListWindow(QWidget):
     def _header_hit(self, pos: QPoint) -> bool:
         if pos.y() > T.LIST_HEADER_H:
             return False
-        if self._btn_close().contains(pos) or self._check_hit().contains(pos):
+        if self._btn_close().contains(pos):
             return False
         return True
 
@@ -654,8 +1141,8 @@ class AlertListWindow(QWidget):
                 hover = "close"
             elif self._btn_folder().contains(pos):
                 hover = "folder"
-            elif self._check_hit().contains(pos):
-                hover = "resume"
+            elif self._btn_stats().contains(pos):
+                hover = "stats"
             elif self._btn_prev().contains(pos) and self._page > 0:
                 hover = "prev"
             elif self._btn_next().contains(pos) and self._page + 1 < self._page_count():
@@ -679,9 +1166,8 @@ class AlertListWindow(QWidget):
                 self._open_folder()
                 event.accept()
                 return
-            if self._check_hit().contains(pos):
-                self.resume_after_close = not self.resume_after_close
-                self.update()
+            if self._btn_stats().contains(pos):
+                self._open_stats()
                 event.accept()
                 return
             if self._btn_prev().contains(pos):
@@ -733,22 +1219,6 @@ class AlertListWindow(QWidget):
         p.setPen(T.SETTINGS_TEXT)
         p.setFont(_ui_font(16))
         p.drawText(QRect(24, 14, 160, 28), Qt.AlignmentFlag.AlignVCenter, "预警列表")
-
-        box = QRectF(self._check_box())
-        p.setPen(QPen(T.WINDOW_RIM, 1.1))
-        p.setBrush(QColor(255, 255, 255, 22 if self._hover == "resume" else 12))
-        p.drawRoundedRect(box, 4.0, 4.0)
-        if self.resume_after_close:
-            p.setPen(QPen(T.ICON_GREEN, 1.8))
-            p.drawLine(int(box.x() + 4), int(box.center().y()), int(box.x() + 7), int(box.bottom() - 4))
-            p.drawLine(int(box.x() + 7), int(box.bottom() - 4), int(box.right() - 4), int(box.y() + 4))
-        p.setPen(T.SETTINGS_TEXT)
-        p.setFont(_ui_font(13))
-        p.drawText(
-            QRect(self._check_box().right() + 8, 12, 132, 28),
-            Qt.AlignmentFlag.AlignVCenter,
-            "关闭后继续监测",
-        )
         self._paint_close_x(p, self._btn_close(), self._hover == "close")
 
         pages = self._page_count()
@@ -764,6 +1234,7 @@ class AlertListWindow(QWidget):
             p.drawText(area, Qt.AlignmentFlag.AlignCenter, "暂无预警记录")
 
         _paint_metal_button(p, self._btn_folder(), "打开文件夹", self._hover == "folder")
+        _paint_metal_button(p, self._btn_stats(), "统计与分析", self._hover == "stats")
         _paint_metal_button(p, self._btn_prev(), "上一页", self._hover == "prev", self._page > 0)
         p.setPen(T.SETTINGS_MUTED)
         p.setFont(_ui_font(12))

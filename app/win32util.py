@@ -19,7 +19,10 @@ WS_EX_TOOLWINDOW = 0x00000080
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND = 1
 
-_demo_capture = False
+# hwnd -> affinity last applied successfully. The overlay re-applies its
+# affinity on every detector frame; skipping unchanged values keeps DWM from
+# re-evaluating the window's composition path once per second.
+_affinity_applied: dict[int, int] = {}
 
 
 def _hwnd(widget: QWidget) -> int:
@@ -39,27 +42,22 @@ def disable_system_rounding(widget: QWidget) -> None:
         pass
 
 
-def set_demo_capture(allowed: bool) -> None:
-    global _demo_capture
-    _demo_capture = bool(allowed)
-
-
-def demo_capture_allowed() -> bool:
-    return _demo_capture
-
-
 def set_capture_allowed(widget: QWidget, allowed: bool) -> None:
     try:
-        ctypes.windll.user32.SetWindowDisplayAffinity(
-            _hwnd(widget),
-            WDA_NONE if allowed else WDA_EXCLUDEFROMCAPTURE,
-        )
+        hwnd = _hwnd(widget)
+        value = WDA_NONE if allowed else WDA_EXCLUDEFROMCAPTURE
+        if _affinity_applied.get(hwnd) == value:
+            return
+        if ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, value):
+            _affinity_applied[hwnd] = value
+        else:
+            _affinity_applied.pop(hwnd, None)
     except Exception:
         pass
 
 
 def apply_capture_affinity(widget: QWidget) -> None:
-    set_capture_allowed(widget, _demo_capture)
+    set_capture_allowed(widget, False)
 
 
 def exclude_from_capture(widget: QWidget) -> None:

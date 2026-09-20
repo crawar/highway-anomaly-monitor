@@ -14,8 +14,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from app import diag
 from app.config import AppSettings
 
+log = diag.setup("ui")
 _token_cache: dict[str, tuple[str, float]] = {}
 
 
@@ -24,7 +26,7 @@ def send_alert_async(settings: AppSettings, image_path: Path | str, kind_label: 
         return
     webhook = str(settings.ding_webhook or "").strip()
     if not webhook:
-        print("DingTalk alert is on but webhook is empty")
+        log.warning("DingTalk alert is on but webhook is empty")
         return
     args = (
         webhook,
@@ -71,7 +73,7 @@ def _send_alert(
         lines.append("")
         lines.append(f"![]({media_id})")
     elif path.is_file() and (app_key or app_secret):
-        print("DingTalk image upload failed; sending text only")
+        log.warning("DingTalk image upload failed; sending text only")
     payload = {
         "msgtype": "markdown",
         "markdown": {
@@ -82,11 +84,13 @@ def _send_alert(
     try:
         result = _post_json(_signed_url(webhook, secret), payload)
     except Exception as exc:
-        print(f"DingTalk send failed: {exc}")
+        log.warning("DingTalk send failed: %s", exc)
         return
     errcode = result.get("errcode", 1)
     if errcode not in (0, None):
-        print(f"DingTalk send rejected: {result}")
+        log.warning("DingTalk send rejected: %s", result)
+    else:
+        log.info("DingTalk sent %s image=%s", path.name, bool(media_id))
 
 
 def _signed_url(webhook: str, secret: str) -> str:
@@ -112,7 +116,7 @@ def _upload_with_app(app_key: str, app_secret: str, path: Path) -> str:
             return ""
         return _upload_media(token, path)
     except Exception as exc:
-        print(f"DingTalk upload failed: {exc}")
+        log.warning("DingTalk upload failed: %s", exc)
         return ""
 
 
@@ -127,7 +131,7 @@ def _app_access_token(app_key: str, app_secret: str) -> str:
     with urllib.request.urlopen(req, timeout=15) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     if result.get("errcode") not in (0, None):
-        print(f"DingTalk token rejected: {result.get('errmsg') or result}")
+        log.warning("DingTalk token rejected: %s", result.get("errmsg") or result)
         return ""
     token = str(result.get("access_token") or "")
     if not token:
@@ -152,7 +156,7 @@ def _upload_media(token: str, path: Path) -> str:
     with urllib.request.urlopen(req, timeout=20) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     if result.get("errcode") not in (0, None):
-        print(f"DingTalk media rejected: {result.get('errmsg') or result}")
+        log.warning("DingTalk media rejected: %s", result.get("errmsg") or result)
         return ""
     media_id = str(result.get("media_id") or "")
     if media_id:

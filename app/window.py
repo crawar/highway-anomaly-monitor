@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import (
+    QEvent,
     Property,
     QEasingCurve,
     QPoint,
+    QPointF,
     QPropertyAnimation,
     QRect,
     QRectF,
@@ -13,15 +17,24 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QColor, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPen
+from PySide6.QtGui import (
+    QColor,
+    QLinearGradient,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+)
 from PySide6.QtWidgets import QApplication, QWidget
 
-from app import VERSION, theme as T
+from app import VERSION, diag, theme as T
 from app.alerts import Alert, AlertEngine
 from app.buttons import MetalButton
 from app.hud import ExitPopup, MetalTip
 from app.list_ui import AlertListWindow
 from app.overlay import OverlayWindow
+from app.stats_ui import StatsWindow
 from app.paths import (
     WEIGHTS_FILE,
     ensure_download_dir,
@@ -38,10 +51,15 @@ from app.win32util import (
     apply_capture_affinity,
     capture_hidden,
     disable_system_rounding,
-    set_demo_capture,
 )
 from app.weights import weights_ready
 
+log = diag.setup("ui")
+_RAISE_EVERY_SEC = 10.0
+_STARTUP_EFFECT_SEC = 3.0
+_STARTUP_TICK_MS = 40
+_IDLE_GLINT_DELAY_MS = 10_000
+_IDLE_GLINT_SEC = 1.0
 
 TIPS = {
     "play": "启动/停止",
@@ -82,7 +100,12 @@ class HomeWindow(QWidget):
         self._alerting = False
         self._shot_cool = False
         self._shot_kinds: frozenset[str] = frozenset()
-        self._list_was_running = False
+        self._last_raise = 0.0
+        self._startup_started = False
+        self._startup_active = False
+        self._startup_epoch = 0.0
+        self._idle_glint_active = False
+        self._idle_glint_epoch = 0.0
         self._alert = AlertEngine()
         self._voice = VoicePlayer(self)
 
@@ -95,10 +118,8 @@ class HomeWindow(QWidget):
         self.btn_settings = MetalButton("settings", self)
         self.btn_collapse = MetalButton("collapse", self)
 
-        # Buttons that fade out when collapsed; list stays visible.
-        self._mid_buttons = (self.btn_select, self.btn_settings)
-        # List stays usable while running so alert images can be opened
-        # from the collapsed capsule.
+        # Buttons that fade out when collapsed; only play + collapse remain.
+        self._mid_buttons = (self.btn_select, self.btn_list, self.btn_settings)
         self._lock_buttons = (self.btn_select, self.btn_settings)
         self._all_buttons = (
             self.btn_play,
@@ -125,17 +146,32 @@ class HomeWindow(QWidget):
         self._cooldown = QTimer(self)
         self._cooldown.setSingleShot(True)
         self._cooldown.timeout.connect(self._on_cooldown_end)
+        self._peek_resume = QTimer(self)
+        self._peek_resume.setSingleShot(True)
+        self._peek_resume.setInterval(3000)
+        self._peek_resume.timeout.connect(self._on_peek_resume)
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setInterval(_STARTUP_TICK_MS)
+        self._startup_timer.timeout.connect(self._on_startup_tick)
+        self._idle_glint_delay = QTimer(self)
+        self._idle_glint_delay.setSingleShot(True)
+        self._idle_glint_delay.setInterval(_IDLE_GLINT_DELAY_MS)
+        self._idle_glint_delay.timeout.connect(self._start_idle_glint)
 
         self._overlay = OverlayWindow()
         self._runtime = DetectRuntime(self)
         self._settings_panel = SettingsPanel(self)
         self._list_panel = AlertListWindow(self)
-        set_demo_capture(load_settings().demo_record)
+        self._stats_panel = StatsWindow(self)
         self._overlay.apply_settings(load_settings())
 
         self._runtime.scene_ready.connect(self._on_scene_ready)
         self._settings_panel.changed.connect(self._on_settings_changed)
         self._list_panel.closed.connect(self._on_list_closed)
+        self._list_panel.peek_closed.connect(self._on_peek_closed)
+        self._list_panel.stats_requested.connect(self._on_stats_requested)
+        self._stats_panel.back_to_list.connect(self._on_stats_back)
+        self._stats_panel.closed.connect(self._on_list_closed)
         self._runtime.prepare()
 
         app = QApplication.instance()
@@ -167,6 +203,9 @@ class HomeWindow(QWidget):
         fade = max(0.0, 1.0 - self._t * 1.85)
         for btn in self._mid_buttons:
             btn.set_face_opacity(fade)
+        # Collapsed capsule = unattended monitoring; a static stop icon there
+        # saves the compositor a repaint every 100 ms for the whole session.
+        self.btn_play.set_breath_paused(self._t >= 0.999)
         self._layout_buttons()
         if self._tip_btn is not None and (
             not self._tip_btn.isVisible() or self._tip_btn._face_opacity < 0.45
@@ -189,6 +228,78 @@ class HomeWindow(QWidget):
             disable_system_rounding(self)
             self._win_round_applied = True
         self._apply_capture_affinity()
+        if not self._startup_started:
+            self._start_startup_effect()
+
+    def _start_startup_effect(self) -> None:
+        self._startup_started = True
+        self._startup_active = True
+        self._startup_epoch = time.monotonic()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+        self._startup_timer.start()
+        self.update()
+
+    def _stop_startup_effect(self) -> None:
+        if not self._startup_active:
+            return
+        self._startup_active = False
+        self._startup_timer.stop()
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        self.update()
+        self._schedule_idle_glint()
+
+    def _on_startup_tick(self) -> None:
+        now = time.monotonic()
+        if self._startup_active and now - self._startup_epoch >= _STARTUP_EFFECT_SEC:
+            self._stop_startup_effect()
+            return
+        if self._idle_glint_active and now - self._idle_glint_epoch >= _IDLE_GLINT_SEC:
+            self._idle_glint_active = False
+            self._startup_timer.stop()
+            self.update()
+            return
+        self.update()
+
+    def _schedule_idle_glint(self) -> None:
+        if getattr(self, "_did_shutdown", False) or self._running:
+            return
+        self._idle_glint_delay.start()
+
+    def _start_idle_glint(self) -> None:
+        if getattr(self, "_did_shutdown", False) or self._running:
+            return
+        self._idle_glint_active = True
+        self._idle_glint_epoch = time.monotonic()
+        # Schedule by sweep start, so successive sweeps begin exactly 10 s apart.
+        self._idle_glint_delay.start()
+        self._startup_timer.start()
+        self.update()
+
+    def _stop_idle_glint(self) -> None:
+        self._idle_glint_delay.stop()
+        if not self._idle_glint_active:
+            return
+        self._idle_glint_active = False
+        if not self._startup_active:
+            self._startup_timer.stop()
+        self.update()
+
+    def eventFilter(self, watched, event) -> bool:
+        if self._startup_active and event.type() in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.Wheel,
+            QEvent.Type.KeyPress,
+            QEvent.Type.Shortcut,
+            QEvent.Type.ContextMenu,
+            QEvent.Type.TouchBegin,
+        ):
+            self._stop_startup_effect()
+        return super().eventFilter(watched, event)
 
     def _set_collapsed(self, collapsed: bool) -> None:
         if self._target_collapsed == collapsed:
@@ -212,6 +323,7 @@ class HomeWindow(QWidget):
 
     def _on_play_clicked(self) -> None:
         self._hide_tip()
+        self._cancel_peek_resume()
         if self._running:
             self._stop_running()
             return
@@ -231,9 +343,13 @@ class HomeWindow(QWidget):
         if self.monitor_region is None:
             return
         if not weights_ready():
+            log.error("Missing YOLO weights: %s", WEIGHTS_FILE)
             print(f"Missing YOLO weights: {WEIGHTS_FILE}")
             print("Place yolo26l.pt in the Download folder next to the program.")
             return
+        log.info("play: begin running")
+        self._stop_idle_glint()
+        self._cancel_peek_resume()
         self._running = True
         self._alerting = False
         self._shot_cool = False
@@ -250,10 +366,13 @@ class HomeWindow(QWidget):
         self._overlay.show()
         self.raise_()
         if not self._runtime.start(self.monitor_region):
+            log.error("runtime.start failed, stopping")
             self._stop_running()
             return
 
     def _stop_running(self) -> None:
+        if self._running:
+            log.info("stop: running=%s alerting=%s shot_cool=%s", self._running, self._alerting, self._shot_cool)
         self._running = False
         self._alerting = False
         self._shot_cool = False
@@ -268,6 +387,7 @@ class HomeWindow(QWidget):
         self._overlay.hide()
         self._runtime.pause()
         self._set_collapsed(False)
+        self._schedule_idle_glint()
 
     def _on_settings_clicked(self) -> None:
         if self._running:
@@ -281,6 +401,7 @@ class HomeWindow(QWidget):
         apply_capture_affinity(self._overlay)
         apply_capture_affinity(self._settings_panel)
         apply_capture_affinity(self._list_panel)
+        apply_capture_affinity(self._stats_panel)
         apply_capture_affinity(self._tip)
         apply_capture_affinity(self._exit_popup)
         about = getattr(self._exit_popup, "_about", None)
@@ -290,7 +411,7 @@ class HomeWindow(QWidget):
             apply_capture_affinity(self._picker)
 
     def _on_settings_changed(self, settings) -> None:
-        set_demo_capture(bool(settings.demo_record))
+        log.info("settings changed: %s", diag.settings_summary(settings))
         self._overlay.apply_settings(settings)
         self._apply_capture_affinity()
         if self._running:
@@ -300,10 +421,28 @@ class HomeWindow(QWidget):
         if not self._running or self.monitor_region is None:
             return
         self._overlay.set_region(self.monitor_region)
+        now = time.monotonic()
         if not self._overlay.isVisible():
             self._overlay.show()
-        self.raise_()
+            self._last_raise = 0.0
+        # Re-asserting Z-order every frame is a SetWindowPos per second for
+        # DWM; both windows are already stay-on-top, so a slow refresh is enough.
+        if now - self._last_raise >= _RAISE_EVERY_SEC:
+            self._last_raise = now
+            self.raise_()
         alert = self._alert.evaluate(parking, intrusion, settings)
+        if alert.active != self._alerting:
+            if alert.active:
+                log.info(
+                    "alert on kinds=%s parking=%d intrusion=%d detections=%d/%d",
+                    sorted(alert.kinds),
+                    len(alert.parking),
+                    len(alert.intrusion),
+                    len(parking),
+                    len(intrusion),
+                )
+            else:
+                log.info("alert off")
         self._alerting = alert.active
         self._overlay.set_alerting(self._alerting)
         self._overlay.set_scene(
@@ -314,12 +453,11 @@ class HomeWindow(QWidget):
             alert.items if alert.active else None,
         )
         if self._alerting:
+            scheduled = False
             if self._should_save_shot(alert.kinds):
-                self._save_alert_shot(alert, image_size, settings)
-            self._voice.update(alert.voice_kind if settings.voice_alert else None)
-            if settings.auto_open_list:
-                kind = alert.voice_kind
-                QTimer.singleShot(0, lambda k=kind: self._open_alert_list(notice_kind=k))
+                scheduled = self._save_alert_shot(alert, parking, intrusion, image_size, settings)
+            if not scheduled:
+                self._voice.update(alert.voice_kind if settings.voice_alert else None)
             return
         self._voice.update(None)
 
@@ -330,9 +468,9 @@ class HomeWindow(QWidget):
             return True
         return kinds > self._shot_kinds
 
-    def _save_alert_shot(self, alert: Alert, image_size, settings) -> None:
+    def _save_alert_shot(self, alert: Alert, parking, intrusion, image_size, settings) -> bool:
         if self.monitor_region is None:
-            return
+            return False
         with capture_hidden(self._overlay, self):
             path = save_alert_image(
                 self.monitor_region,
@@ -340,12 +478,30 @@ class HomeWindow(QWidget):
                 alert.prefix,
                 image_size,
                 settings,
+                parking=parking,
+                intrusion=intrusion,
             )
+        log.info(
+            "alert snapshot kinds=%s items=%d path=%s cooldown=%ss",
+            sorted(alert.kinds),
+            len(alert.items),
+            path.name if path is not None else None,
+            settings.cooldown_sec,
+        )
+        scheduled = False
         if path is not None:
             send_alert_async(settings, path, alert.kind_label)
+            if settings.auto_open_image:
+                if self._running:
+                    self._stop_running()
+                if settings.voice_alert:
+                    self._voice.loop_until_move(alert.voice_kind)
+                self._open_alert_image(path)
+                scheduled = True
         self._shot_cool = True
         self._shot_kinds = alert.kinds
         self._cooldown.start(int(settings.cooldown_sec) * 1000)
+        return scheduled
 
     def _on_cooldown_end(self) -> None:
         self._shot_cool = False
@@ -355,6 +511,11 @@ class HomeWindow(QWidget):
         if getattr(self, "_did_shutdown", False):
             return
         self._did_shutdown = True
+        log.info("app shutdown running=%s", self._running)
+        self._stop_startup_effect()
+        self._stop_idle_glint()
+        self._cancel_peek_resume()
+        self._list_panel.dismiss_peek()
         self._cooldown.stop()
         self._voice.stop()
         self._runtime.shutdown()
@@ -362,6 +523,8 @@ class HomeWindow(QWidget):
         self._overlay.close()
         self._list_panel.hide()
         self._list_panel.close()
+        self._stats_panel.hide()
+        self._stats_panel.close()
 
     def closeEvent(self, event) -> None:
         self._shutdown()
@@ -370,8 +533,11 @@ class HomeWindow(QWidget):
     def _on_select_clicked(self) -> None:
         if self._running or self._picker is not None:
             return
+        self._cancel_peek_resume()
+        self._list_panel.dismiss_peek()
         self._hide_tip()
         self._list_panel.hide()
+        self._stats_panel.hide()
         self._overlay.hide()
         self.btn_select.set_toggled(True)
         app = QApplication.instance()
@@ -398,6 +564,7 @@ class HomeWindow(QWidget):
 
     def _on_region_selected(self, rect: QRect) -> None:
         self.monitor_region = QRect(rect)
+        log.info("region selected logical=%s", (rect.x(), rect.y(), rect.width(), rect.height()))
         self._end_pick()
 
     def _on_region_cancelled(self) -> None:
@@ -416,32 +583,62 @@ class HomeWindow(QWidget):
     def _on_list_clicked(self) -> None:
         self._open_alert_list()
 
-    def _open_alert_list(self, notice_kind: str | None = None) -> None:
+    def _open_alert_list(self) -> None:
         if not self.isVisible() and self._picker is not None:
             return
+        already_open = self._list_panel.isVisible() or self._stats_panel.isVisible()
+        self._cancel_peek_resume()
+        self._list_panel.dismiss_peek()
         self._hide_tip()
         self._settings_panel.hide()
-        self._list_was_running = bool(self._running)
-        if self._running:
+        self._stats_panel.hide()
+        if not already_open and self._running:
             self._stop_running()
+        log.info("alert list opened")
         self._list_panel.show_at(self._capsule_global())
-        if notice_kind:
-            self._voice.loop_until_move(notice_kind)
         self.raise_()
         self.activateWindow()
 
-    def _on_list_closed(self, resume: bool) -> None:
+    def _on_stats_requested(self) -> None:
+        self._stats_panel.show_at(self._list_panel.frameGeometry())
+
+    def _on_stats_back(self) -> None:
+        self._list_panel.reveal()
+
+    def _on_list_closed(self) -> None:
+        log.info("alert list closed")
+        self._stats_panel.hide()
         self._voice.stop()
         self.raise_()
         self.activateWindow()
-        if (
-            resume
-            and self._list_was_running
-            and self.monitor_region is not None
-            and not self._running
-        ):
+
+    def _cancel_peek_resume(self) -> None:
+        self._peek_resume.stop()
+
+    def _open_alert_image(self, path) -> None:
+        if path is None or not path.is_file():
+            return
+        self._cancel_peek_resume()
+        log.info("alert image opened auto=1 path=%s", path.name)
+        self._list_panel.open_saved_image(path, self._capsule_global())
+
+    def _on_peek_closed(self, auto_opened: bool) -> None:
+        if not auto_opened:
+            return
+        self._voice.stop()
+        if getattr(self, "_did_shutdown", False):
+            return
+        if self.monitor_region is None or self._running:
+            return
+        log.info("auto image closed; resume monitoring in 3s")
+        self._peek_resume.start()
+
+    def _on_peek_resume(self) -> None:
+        if getattr(self, "_did_shutdown", False):
+            return
+        if self.monitor_region is not None and not self._running:
+            log.info("resume monitoring after auto image")
             self._begin_running()
-        self._list_was_running = False
 
     def _on_btn_hover(self, btn: MetalButton) -> None:
         self._tip_btn = btn
@@ -494,12 +691,8 @@ class HomeWindow(QWidget):
 
         self.btn_play.move(left, y)
         self.btn_collapse.move(right, y)
-
-        # Keep middle buttons anchored to the right so they stay put
-        # while the window's left edge retracts. The list button slides
-        # one slot right to take the fading settings button's place.
         self.btn_settings.move(right - T.STEP, y)
-        self.btn_list.move(round(right - T.STEP * (2.0 - self._t)), y)
+        self.btn_list.move(right - T.STEP * 2, y)
         self.btn_select.move(right - T.STEP * 3, y)
 
     def start_window_drag(self, global_pos: QPoint) -> None:
@@ -602,3 +795,45 @@ class HomeWindow(QWidget):
         inner_pen = QPen(QColor(0, 0, 0, 90), 1.0)
         p.setPen(inner_pen)
         p.drawRoundedRect(body.adjusted(1.2, 1.2, -1.2, -1.2), radius - 1, radius - 1)
+
+        if self._startup_active or self._idle_glint_active:
+            epoch = self._startup_epoch if self._startup_active else self._idle_glint_epoch
+            elapsed = max(0.0, time.monotonic() - epoch)
+
+            # A slanted silver-white metallic glint crosses the capsule.
+            phase = elapsed % 1.0
+            center_x = body.left() - 42.0 + phase * (body.width() + 84.0)
+            glint = QPainterPath()
+            glint.addPolygon(
+                QPolygonF(
+                    [
+                        QPointF(center_x - 28.0, body.bottom()),
+                        QPointF(center_x - 2.0, body.bottom()),
+                        QPointF(center_x + 34.0, body.top()),
+                        QPointF(center_x + 8.0, body.top()),
+                    ]
+                )
+            )
+            p.save()
+            p.setClipPath(clip)
+            shine = QLinearGradient(center_x - 28.0, 0.0, center_x + 34.0, 0.0)
+            shine.setColorAt(0.0, QColor(188, 198, 210, 0))
+            shine.setColorAt(0.45, QColor(218, 226, 236, 110))
+            shine.setColorAt(0.55, QColor(255, 255, 255, 205))
+            shine.setColorAt(1.0, QColor(188, 198, 210, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(shine)
+            p.drawPath(glint)
+            p.restore()
+
+            # Only the initial three-second startup hint has a red outline.
+            if self._startup_active and int(elapsed / 0.5) % 2 == 0:
+                alert_pen = QPen(T.BOX_ALERT, 3.0)
+                alert_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                p.setPen(alert_pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(
+                    body.adjusted(-1.5, -1.5, 1.5, 1.5),
+                    radius + 1.5,
+                    radius + 1.5,
+                )

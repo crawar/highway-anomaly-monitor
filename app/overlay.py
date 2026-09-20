@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QPainter, QPen
+from PySide6.QtGui import QPainter, QPen, QRegion
 from PySide6.QtWidgets import QWidget
 
 from app import theme as T
@@ -98,7 +98,18 @@ class OverlayWindow(QWidget):
             self.update()
             return
         self._region_on = not self._region_on
-        self.update()
+        # Only the frame toggles; the boxes are untouched. Repainting just the
+        # border band keeps each blink to a few hundred KB instead of the
+        # whole 1500x900 surface being re-uploaded 4x per second.
+        self.update(self._border_region())
+
+    def _border_region(self) -> QRegion:
+        band = max(T.REGION_PEN, T.REGION_CORNER_PEN) + 3
+        full = self.rect()
+        inner = full.adjusted(band, band, -band, -band)
+        if inner.width() <= 0 or inner.height() <= 0:
+            return QRegion(full)
+        return QRegion(full).subtracted(QRegion(inner))
 
     def _map_box(self, xyxy: list[float]) -> QRect:
         iw, ih = self._image_size
@@ -170,7 +181,7 @@ class OverlayWindow(QWidget):
             return
         conf = float(item.get("conf") or 0.0)
         high = conf >= threshold
-        if not high and self._settings.hide_low_conf and id(item) not in self._alert_ids:
+        if not high and not self._settings.debug_mode and id(item) not in self._alert_ids:
             return
         if id(item) in self._alert_ids:
             color = T.BOX_ALERT
@@ -188,9 +199,8 @@ class OverlayWindow(QWidget):
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setFont(self.font())
-        if not self._settings.demo_record:
-            name = LABELS_ZH.get(str(item.get("name") or ""), str(item.get("name") or ""))
-            self._paint_tag(p, box, f"{name} {conf:.2f}", above=True)
+        name = LABELS_ZH.get(str(item.get("name") or ""), str(item.get("name") or ""))
+        self._paint_tag(p, box, f"{name} {conf:.2f}", above=True)
         still = int(item.get("still") or 0)
         if still > 0:
             self._paint_tag(p, box, str(still), above=False)

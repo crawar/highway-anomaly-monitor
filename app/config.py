@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from app import theme as T
+from app.detect import DEFAULT_WORKER_THREADS, WORKER_THREADS_MAX, WORKER_THREADS_MIN
 from app.paths import CONFIG_FILE
 
 
@@ -20,18 +21,26 @@ def snap_cooldown(value: float) -> int:
     return int(min(steps, key=lambda step: abs(step - float(value))))
 
 
+def _debug_mode_from(data: dict[str, Any]) -> bool:
+    if "debug_mode" in data:
+        return bool(data.get("debug_mode"))
+    if "hide_low_conf" in data:
+        return not bool(data.get("hide_low_conf"))
+    return False
+
+
 @dataclass
 class AppSettings:
     interval_sec: float = T.DEFAULT_INTERVAL
     show_labels: bool = True
-    hide_low_conf: bool = True
+    debug_mode: bool = False
     parking_conf: float = T.DEFAULT_CONF
     intrusion_conf: float = T.DEFAULT_INTRUSION_CONF
     intrusion_alert: bool = True
     parking_alert: bool = True
     voice_alert: bool = True
-    auto_open_list: bool = False
-    demo_record: bool = False
+    auto_open_image: bool = False
+    gaze_guidance: bool = True
     cooldown_sec: int = T.DEFAULT_COOLDOWN
     parking_hold_sec: int = T.DEFAULT_PARKING_HOLD
     parking_grace_frames: int = T.DEFAULT_PARKING_GRACE
@@ -41,18 +50,22 @@ class AppSettings:
     ding_webhook: str = ""
     ding_app_key: str = ""
     ding_app_secret: str = ""
+    # Detector process: torch intra-op threads, and an optional logical-CPU
+    # list such as "16-23" (e.g. the E-cores of an i7-13700K). Empty = all CPUs.
+    worker_threads: int = DEFAULT_WORKER_THREADS
+    worker_cpu_affinity: str = ""
 
     def clamp(self) -> AppSettings:
         self.interval_sec = snap_interval(self.interval_sec)
         self.show_labels = bool(self.show_labels)
-        self.hide_low_conf = bool(self.hide_low_conf)
+        self.debug_mode = bool(self.debug_mode)
         self.parking_conf = min(0.95, max(0.05, float(self.parking_conf)))
         self.intrusion_conf = min(0.95, max(0.05, float(self.intrusion_conf)))
         self.intrusion_alert = bool(self.intrusion_alert)
         self.parking_alert = bool(self.parking_alert)
         self.voice_alert = bool(self.voice_alert)
-        self.auto_open_list = bool(self.auto_open_list)
-        self.demo_record = bool(self.demo_record)
+        self.auto_open_image = bool(self.auto_open_image)
+        self.gaze_guidance = bool(self.gaze_guidance)
         self.ding_alert = bool(self.ding_alert)
         self.ding_keyword = str(self.ding_keyword or "").strip()
         self.ding_secret = str(self.ding_secret or "").strip()
@@ -72,6 +85,12 @@ class AppSettings:
                 max(T.PARKING_GRACE_MIN, round(float(self.parking_grace_frames))),
             )
         )
+        try:
+            threads = int(round(float(self.worker_threads)))
+        except (TypeError, ValueError):
+            threads = DEFAULT_WORKER_THREADS
+        self.worker_threads = min(WORKER_THREADS_MAX, max(WORKER_THREADS_MIN, threads))
+        self.worker_cpu_affinity = str(self.worker_cpu_affinity or "").strip()
         return self
 
 
@@ -79,14 +98,14 @@ def _from_dict(data: dict[str, Any]) -> AppSettings:
     return AppSettings(
         interval_sec=data.get("interval_sec", T.DEFAULT_INTERVAL),
         show_labels=data.get("show_labels", True),
-        hide_low_conf=data.get("hide_low_conf", True),
+        debug_mode=_debug_mode_from(data),
         parking_conf=data.get("parking_conf", T.DEFAULT_CONF),
         intrusion_conf=data.get("intrusion_conf", T.DEFAULT_INTRUSION_CONF),
         intrusion_alert=data.get("intrusion_alert", True),
         parking_alert=data.get("parking_alert", True),
         voice_alert=data.get("voice_alert", True),
-        auto_open_list=data.get("auto_open_list", False),
-        demo_record=data.get("demo_record", False),
+        auto_open_image=data.get("auto_open_image", False),
+        gaze_guidance=data.get("gaze_guidance", True),
         cooldown_sec=data.get("cooldown_sec", T.DEFAULT_COOLDOWN),
         parking_hold_sec=data.get("parking_hold_sec", T.DEFAULT_PARKING_HOLD),
         parking_grace_frames=data.get("parking_grace_frames", T.DEFAULT_PARKING_GRACE),
@@ -96,6 +115,8 @@ def _from_dict(data: dict[str, Any]) -> AppSettings:
         ding_webhook=data.get("ding_webhook", ""),
         ding_app_key=data.get("ding_app_key", ""),
         ding_app_secret=data.get("ding_app_secret", ""),
+        worker_threads=data.get("worker_threads", DEFAULT_WORKER_THREADS),
+        worker_cpu_affinity=data.get("worker_cpu_affinity", ""),
     ).clamp()
 
 

@@ -14,10 +14,10 @@ from app.config import load_settings, save_settings
 from app.hud import MetalTip, _clamp_to_screen, _paint_metal_panel, _ui_font
 from app.win32util import apply_capture_affinity, disable_system_rounding
 
-HOLD_TIP = "静止达此时长后报警。按检测间隔向上取整，且至少连续3帧。"
+INTERVAL_TIP = "监视器画面越卡，监视间隔建议越长"
+HOLD_TIP = "静止达此时长后报警。按监测间隔向上取整，且至少连续3帧。"
 GRACE_TIP = "蓝框之间允许的连续绿框或连续空帧。绿框仍计数，空帧不计数但保留轨迹，超出才清零。"
-COOLDOWN_TIP = "同样影响钉钉推送"
-DEMO_TIP = "该模式下穿透功能失效，仅用于录屏演示，日常预警请关闭"
+COOLDOWN_TIP = "同样影响钉钉，仅在不启用“预警后自动打开图片”功能时生效"
 DING_HINT = "关键词、加签按钉钉机器人安全设置选填。"
 DING_WARN = "不填写Client ID / Secret，钉钉只能发送文字"
 DING_HELP_HTML = """
@@ -137,18 +137,18 @@ class SettingsPanel(QWidget):
             "intrusion_alert": QRect(158, 308, 18, 18),
             "parking_alert": QRect(18, 338, 18, 18),
             "voice_alert": QRect(158, 338, 18, 18),
-            "hide_low_conf": QRect(18, 374, 18, 18),
-            "auto_open_list": QRect(18, 404, 18, 18),
-            "demo_record": QRect(18, 434, 18, 18),
+            "debug_mode": QRect(18, 368, 18, 18),
+            "gaze_guidance": QRect(158, 368, 18, 18),
+            "auto_open_image": QRect(18, 398, 18, 18),
         }
         self._check_labels = {
             "show_labels": "显示标签",
             "intrusion_alert": "闯入报警",
             "parking_alert": "违停报警",
             "voice_alert": "语音播报",
-            "hide_low_conf": "不显示置信度低目标",
-            "auto_open_list": "预警后自动打开预警列表",
-            "demo_record": "演示录屏",
+            "debug_mode": "调试模式",
+            "auto_open_image": "预警后自动打开图片",
+            "gaze_guidance": "视线引导",
         }
         self._ding_check = QRect(18, 48, 18, 18)
         self._btn_help = QRect(self.width() - 18 - 92, 46, 92, 26)
@@ -330,7 +330,9 @@ class SettingsPanel(QWidget):
             idx = int(round(t * last))
             self._settings.cooldown_sec = T.COOLDOWN_STEPS[max(0, min(last, idx))]
         self._settings.clamp()
-        if key == "hold":
+        if key == "interval":
+            self._show_interval_tip()
+        elif key == "hold":
             self._show_hold_tip()
         elif key == "grace":
             self._show_grace_tip()
@@ -344,11 +346,15 @@ class SettingsPanel(QWidget):
 
     def _check_hit(self, key: str, pos) -> bool:
         box = self._checks[key]
-        extra = 240 if key in ("auto_open_list", "demo_record", "hide_low_conf") else 112
+        extra = 240 if key == "auto_open_image" else 112
         return box.adjusted(-4, -4, extra, 4).contains(pos)
 
     def _ding_check_hit(self, pos) -> bool:
         return self._ding_check.adjusted(-4, -4, 120, 4).contains(pos)
+
+    def _show_interval_tip(self) -> None:
+        top_left = self.mapToGlobal(self._slider_area("interval").topLeft())
+        self._tip.popup(INTERVAL_TIP, QRect(top_left, self._slider_area("interval").size()))
 
     def _show_hold_tip(self) -> None:
         frames = parking_frames(self._settings.interval_sec, self._settings.parking_hold_sec)
@@ -363,12 +369,6 @@ class SettingsPanel(QWidget):
     def _show_cooldown_tip(self) -> None:
         top_left = self.mapToGlobal(self._slider_area("cooldown").topLeft())
         self._tip.popup(COOLDOWN_TIP, QRect(top_left, self._slider_area("cooldown").size()))
-
-    def _show_demo_tip(self) -> None:
-        box = self._checks["demo_record"]
-        hit = box.adjusted(-4, -4, 160, 4)
-        top_left = self.mapToGlobal(hit.topLeft())
-        self._tip.popup(DEMO_TIP, QRect(top_left, hit.size()))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         pos = event.position().toPoint()
@@ -454,6 +454,8 @@ class SettingsPanel(QWidget):
             hover = "tab_main"
         elif self._tab_ding.contains(pos):
             hover = "tab_ding"
+        elif self._tab == "main" and self._slider_area("interval").contains(pos):
+            hover = "interval"
         elif self._tab == "main" and self._slider_area("hold").contains(pos):
             hover = "hold"
         elif self._tab == "main" and self._slider_area("grace").contains(pos):
@@ -476,14 +478,14 @@ class SettingsPanel(QWidget):
                     break
         if hover != self._hover:
             self._hover = hover
-            if hover == "hold":
+            if hover == "interval":
+                self._show_interval_tip()
+            elif hover == "hold":
                 self._show_hold_tip()
             elif hover == "grace":
                 self._show_grace_tip()
             elif hover == "cooldown":
                 self._show_cooldown_tip()
-            elif hover == "demo_record":
-                self._show_demo_tip()
             else:
                 self._tip.hide()
             self.update()
@@ -525,7 +527,7 @@ class SettingsPanel(QWidget):
 
     def _paint_main(self, p: QPainter) -> None:
         self._paint_slider(
-            p, "检测间隔", _fmt_interval(self._settings.interval_sec),
+            p, "监测间隔", _fmt_interval(self._settings.interval_sec),
             self._sliders["interval"], _interval_t(self._settings.interval_sec),
         )
         self._paint_slider(
@@ -556,7 +558,7 @@ class SettingsPanel(QWidget):
             _cooldown_t(self._settings.cooldown_sec),
         )
         for key, rect in self._checks.items():
-            label_w = 240 if key in ("auto_open_list", "demo_record", "hide_low_conf") else 110
+            label_w = 240 if key == "auto_open_image" else 110
             self._paint_check(
                 p, rect, bool(getattr(self._settings, key)),
                 self._check_labels[key], self._hover == key, label_w,

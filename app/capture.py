@@ -113,8 +113,10 @@ class ScreenGrabber:
                     raw.height, raw.width, 4
                 )
                 return np.ascontiguousarray(arr[:, :, :3])
-            except Exception:
-                pass
+            except Exception as exc:
+                from app import diag
+
+                diag.setup("ui").warning("mss grab failed (%s), falling back to Qt grab", exc)
         return self._grab_qt(rect)
 
     def _grab_qt(self, rect: QRect):

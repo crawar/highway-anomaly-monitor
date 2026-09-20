@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+from math import cos, pi
+
 from PySide6.QtCore import (
     Property,
     QEasingCurve,
@@ -10,6 +13,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QRectF,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
@@ -51,15 +55,14 @@ class MetalButton(QWidget):
         self._hover_anim.setDuration(140)
         self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        self._breath_anim = QPropertyAnimation(self, b"breath", self)
-        self._breath_anim.setDuration(T.BREATH_MS)
-        self._breath_anim.setStartValue(0.0)
-        self._breath_anim.setKeyValueAt(0.0, 0.0)
-        self._breath_anim.setKeyValueAt(0.5, 1.0)
-        self._breath_anim.setKeyValueAt(1.0, 0.0)
-        self._breath_anim.setEndValue(0.0)
-        self._breath_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._breath_anim.setLoopCount(-1)
+        # Breathing runs on a coarse timer (10 fps) rather than a 60 fps
+        # QPropertyAnimation: the HUD is a layered window, so every repaint is
+        # an UpdateLayeredWindow the compositor must absorb for the whole run.
+        self._breath_timer = QTimer(self)
+        self._breath_timer.setInterval(T.BREATH_TICK_MS)
+        self._breath_timer.timeout.connect(self._on_breath_tick)
+        self._breath_t0 = 0.0
+        self._breath_paused = False
 
         self._gear_anim = QPropertyAnimation(self, b"gear_rot", self)
         self._gear_anim.setDuration(T.GEAR_SPIN_MS)
@@ -84,14 +87,32 @@ class MetalButton(QWidget):
 
     hover = Property(float, get_hover, set_hover)
 
-    def get_breath(self) -> float:
-        return self._breath
-
-    def set_breath(self, value: float) -> None:
-        self._breath = value
+    def _on_breath_tick(self) -> None:
+        phase = ((time.monotonic() - self._breath_t0) * 1000.0 % T.BREATH_MS) / T.BREATH_MS
+        # 0 -> 1 -> 0 over one period, same ease-in/out shape as before.
+        self._breath = 0.5 - 0.5 * cos(2.0 * pi * phase)
         self.update()
 
-    breath = Property(float, get_breath, set_breath)
+    def _sync_breath(self) -> None:
+        want = self._toggled and self.kind in ("play", "select") and not self._breath_paused
+        if want:
+            if not self._breath_timer.isActive():
+                self._breath_t0 = time.monotonic()
+                self._breath_timer.start()
+            return
+        if self._breath_timer.isActive():
+            self._breath_timer.stop()
+        if self._breath != 0.0:
+            self._breath = 0.0
+            self.update()
+
+    def set_breath_paused(self, paused: bool) -> None:
+        """Freeze the breathing icon (e.g. while the capsule is collapsed)."""
+        paused = bool(paused)
+        if paused == self._breath_paused:
+            return
+        self._breath_paused = paused
+        self._sync_breath()
 
     def get_gear_rot(self) -> float:
         return self._gear_rot
@@ -149,14 +170,7 @@ class MetalButton(QWidget):
 
     def set_toggled(self, on: bool) -> None:
         self._toggled = on
-        if self.kind in ("play", "select"):
-            if on:
-                self._breath_anim.stop()
-                self._breath_anim.setDirection(QPropertyAnimation.Direction.Forward)
-                self._breath_anim.start()
-            else:
-                self._breath_anim.stop()
-                self._breath = 0.0
+        self._sync_breath()
         self.update()
 
     def _on_gear_finished(self) -> None:

@@ -184,8 +184,24 @@ class VehicleTracker:
                 continue
             next_tracks.append(_Track(prev.xyxy, prev.still, 0, misses))
 
+        if len(next_tracks) > T.MAX_PARKING_TRACKS:
+            # Keep tracks seen this frame first, then the longest-standing ones;
+            # the surplus (freshest / already-missing boxes) is destroyed.
+            next_tracks.sort(key=lambda t: (t.misses == 0, t.still), reverse=True)
+            del next_tracks[T.MAX_PARKING_TRACKS :]
+
         self._tracks = next_tracks
         return bool(hits), hits
+
+    def clear_counts(self) -> None:
+        """Restart the still-count of every track without losing the boxes.
+
+        Called right after a parking alert fires so the same vehicle has to
+        stay put for a full hold period again before it alerts a second time.
+        """
+        for track in self._tracks:
+            track.still = 0
+            track.greens = 0
 
 
 def parking_frames(interval_sec: float, hold_sec: float) -> int:
@@ -220,6 +236,7 @@ class AlertEngine:
             )
             if fired:
                 result.parking = hits
+                self._tracker.clear_counts()
         else:
             self._tracker.reset()
         return result

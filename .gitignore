@@ -20,6 +20,13 @@ Download/
 *.pt
 *.pt.part
 
+# Diagnostic logs generated at runtime
+logs/
+otherlogs/
+event-report.txt
+dxdiag.txt
+minidump/
+
 # Alert screenshots generated at runtime
 Pic/*.png
 Pic/*.jpg

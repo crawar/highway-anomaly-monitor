@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+# Detector process tuning. Kept here (no Qt import) so the worker can read it.
+# 4 torch threads: ~250 ms per yolo26l frame on a desktop CPU, well under the
+# slowest allowed interval, at half the peak core load of the old 8.
+DEFAULT_WORKER_THREADS = 4
+WORKER_THREADS_MIN = 1
+WORKER_THREADS_MAX = 16
+
 PARKING_CLASS_IDS = (2, 5, 7)  # car, bus, truck
 INTRUSION_CLASS_IDS = (0, 1, 3, 17, 18, 19)  # person, bicycle, motorcycle, horse, sheep, cow
 ALL_CLASS_IDS = PARKING_CLASS_IDS + INTRUSION_CLASS_IDS

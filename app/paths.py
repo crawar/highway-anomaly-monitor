@@ -23,6 +23,7 @@ WEIGHTS_NAME = "yolo26l.pt"
 WEIGHTS_FILE = DOWNLOAD_DIR / WEIGHTS_NAME
 CONFIG_FILE = ROOT / "config.json"
 YOLO_HOME = DOWNLOAD_DIR / "ultralytics"
+LOG_DIR = ROOT / "logs"
 
 WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26l.pt"
 WEIGHTS_MIN_BYTES = 40_000_000
@@ -37,6 +38,11 @@ def ensure_pic_dir() -> Path:
 def ensure_false_positive_dir() -> Path:
     FALSE_POSITIVE_DIR.mkdir(parents=True, exist_ok=True)
     return FALSE_POSITIVE_DIR
+
+
+def ensure_log_dir() -> Path:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return LOG_DIR
 
 
 def ensure_download_dir() -> Path:

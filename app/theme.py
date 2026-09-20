@@ -10,7 +10,7 @@ SHADOW = 10
 BODY_H = PAD * 2 + BTN_SIZE
 WIN_H = BODY_H + SHADOW * 2
 BTN_COUNT_EXPANDED = 5
-BTN_COUNT_COLLAPSED = 3
+BTN_COUNT_COLLAPSED = 2
 
 STEP = BTN_SIZE + GAP
 EXPANDED_BODY_W = PAD * 2 + BTN_SIZE * BTN_COUNT_EXPANDED + GAP * (BTN_COUNT_EXPANDED - 1)
@@ -22,29 +22,38 @@ COLLAPSE_MS = 320
 PRESS_MS = 70
 GEAR_SPIN_MS = 900
 BREATH_MS = 1100
+# Breathing icon is driven by a plain timer, not a 60 fps QPropertyAnimation:
+# every tick is one UpdateLayeredWindow the compositor has to absorb.
+BREATH_TICK_MS = 100
 BLINK_MS = 380
 TIP_DELAY_MS = 280
 PICK_BLINK_MS = 250
 PICK_BLINK_TICKS = 8
 MIN_REGION = 8
 DETECT_FLOOR = 0.05
-DEFAULT_INTERVAL = 1.0
-INTERVAL_STEPS = (0.5, 1.0, 2.0, 3.0)
-DEFAULT_CONF = 0.41
-DEFAULT_INTRUSION_CONF = 0.41
+# 3 s keeps peak CPU lower than 2 s; parking hold is frame-count based
+# and adapts to the interval, so alert behaviour is unchanged.
+DEFAULT_INTERVAL = 3.0
+INTERVAL_STEPS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
+DEFAULT_CONF = 0.5
+DEFAULT_INTRUSION_CONF = 0.5
 DEFAULT_COOLDOWN = 30
 COOLDOWN_MIN = 30
 COOLDOWN_MAX = 300
 COOLDOWN_STEPS = tuple(range(30, 301, 30))
-DEFAULT_PARKING_HOLD = 4
-PARKING_HOLD_MIN = 3
+DEFAULT_PARKING_HOLD = 9
+PARKING_HOLD_MIN = 5
 PARKING_HOLD_MAX = 12
 MIN_PARKING_FRAMES = 3
 DEFAULT_PARKING_GRACE = 2
 PARKING_GRACE_MIN = 0
 PARKING_GRACE_MAX = 3
+# Hard cap on live vehicle tracks. Kept above YOLO's max_det (300) so a single
+# frame's detections always fit; only stale / missing tracks ever get cut.
+MAX_PARKING_TRACKS = 400
 REGION_HINT_MS = 2000
 ALERT_BLINK_MS = 250
+ALERT_BOX_METADATA_KEY = "CarFindAlertBoxes"
 SETTINGS_W = 300
 SETTINGS_H = 602
 LIST_THUMB_W = 260

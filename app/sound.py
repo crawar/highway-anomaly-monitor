@@ -9,7 +9,10 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QCursor
 
+from app import diag
 from app.paths import INTRUSION_WAV, PARKING_WAV
+
+log = diag.setup("ui")
 
 _SND_FILENAME = 0x00020000
 _SND_ASYNC = 0x0001
@@ -36,7 +39,7 @@ def duration_ms(path: Path | str) -> int:
 def play_once(path: Path | str) -> int:
     target = Path(path)
     if not target.is_file():
-        print(f"Missing warning sound: {target}")
+        log.warning("Missing warning sound: %s", target)
         return 0
     winsound.PlaySound(
         str(target),
@@ -73,6 +76,15 @@ class VoicePlayer(QObject):
         self._arm.timeout.connect(self._arm_watch)
         self._watch_pos = None
         self._watch_armed = False
+
+    def play_one(self, kind: str | None) -> int:
+        """Play a single clip and do not repeat. Returns duration in ms."""
+        self.stop()
+        if kind not in _KIND_PATH:
+            return 0
+        self._wanted = None
+        self._start(kind)
+        return duration_ms(_KIND_PATH[kind]) + 80 if self._playing else 0
 
     def update(self, kind: str | None) -> None:
         self._wanted = kind if kind in _KIND_PATH else None
