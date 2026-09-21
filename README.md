@@ -1,8 +1,16 @@
 # Highway Anomaly Monitor
 
-高速公路异常监测（CarFind **V1.1.1**）。Windows 11 透明 HUD：框选监视区域后，用 YOLO 检测违停车辆与闯入目标，并支持语音、截图和钉钉推送。
+高速公路异常监测（CarFind **V1.1.2**）。Windows 11 透明 HUD：框选监视区域后，用 YOLO 检测违停车辆与闯入目标，并支持语音、截图和钉钉推送。
 
 **Author:** [crawar](https://github.com/crawar)
+
+## V1.1.2
+
+本版本主要完善预警后自动打开图片查看器，以及监测启动提示音。
+
+- **就绪提示音**：任何一次启动监测都会先播放 `warning/Rwarning.wav`，播完后再开始实际检测。
+- **无人值守关闭**：自动打开的图片查看器若 30 秒内未检测到鼠标移动，会停止报警音、关闭查看器，并立即恢复监测（等同点击关闭）。
+- **立即恢复监测**：关闭自动弹出的查看器后不再等待 3 秒，立刻进入监测。
 
 ## V1.1.1
 
@@ -29,15 +37,15 @@ Release 说明：https://github.com/ultralytics/assets/releases/tag/v8.4.0
 4. 将 `yolo26l.pt` 放入 `Download/`。
 5. 双击 `run.bat`，或执行 `.venv\Scripts\python.exe -m app`。
 
-打包：确认权重、本地 `config.json` 和 `warning/*.wav` 齐全后运行 `build.bat`。版本号取自 `app/__init__.py` 的 `VERSION`，产物目录为 `dist/CarFind-<版本号>/`（如 `dist/CarFind-V1.1.1/`），旧版本目录会保留；`dist/` 不会提交到本仓库。打包目录里的 `config.json` 仅供本机使用，不要把含密钥的整包上传到 GitHub。
+打包：确认权重、本地 `config.json` 和 `warning/*.wav` 齐全后运行 `build.bat`。版本号取自 `app/__init__.py` 的 `VERSION`，产物目录为 `dist/CarFind-<版本号>/`（如 `dist/CarFind-V1.1.2/`），旧版本目录会保留；`dist/` 不会提交到本仓库。打包目录里的 `config.json` 仅供本机使用，不要把含密钥的整包上传到 GitHub。
 
 ## 主要设置（`config.json`）
 
 - `interval_sec`：监测间隔，默认 3.0 秒。违停判定按帧数自适应。
 - `parking_hold_sec`：违停时间，默认 9 秒。
-- `parking_conf` / `intrusion_conf`：置信度阈值，默认 0.5。
+- `parking_conf` / `intrusion_conf`：置信度阈值，默认 0.45。
 - `debug_mode`：调试模式。勾选后实时窗口和存图会显示全部识别框；关闭时实时窗口不画绿框，存图只保留红框。
-- `auto_open_image`：预警后自动打开图片。勾选后报警会停监测、存图并弹出查看器；语音循环到鼠标移动才停。关闭查看器约 3 秒后恢复监测。
+- `auto_open_image`：预警后自动打开图片。勾选后报警会停监测、存图并弹出查看器；语音循环到鼠标移动才停。30 秒内鼠标未移动则关闭查看器并立即恢复监测；手动关闭同样立即恢复。
 - `gaze_guidance`：视线引导。单红框会渐进放大居中；多红框会闪红圈。
 - `cooldown_sec`：报警冷却。同样影响钉钉，仅在未启用 `auto_open_image` 时生效。
 - `worker_threads`：检测进程的 torch 线程数，默认 4（1–16）。

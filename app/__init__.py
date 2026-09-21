@@ -1,4 +1,4 @@
 """CarFind HUD overlay UI."""
 
-VERSION = "V1.1.1"
+VERSION = "V1.1.2"
 

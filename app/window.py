@@ -108,6 +108,7 @@ class HomeWindow(QWidget):
         self._idle_glint_epoch = 0.0
         self._alert = AlertEngine()
         self._voice = VoicePlayer(self)
+        self._voice.idle_timeout.connect(self._on_auto_peek_idle)
 
         ensure_pic_dir()
         ensure_download_dir()
@@ -146,10 +147,9 @@ class HomeWindow(QWidget):
         self._cooldown = QTimer(self)
         self._cooldown.setSingleShot(True)
         self._cooldown.timeout.connect(self._on_cooldown_end)
-        self._peek_resume = QTimer(self)
-        self._peek_resume.setSingleShot(True)
-        self._peek_resume.setInterval(3000)
-        self._peek_resume.timeout.connect(self._on_peek_resume)
+        self._detect_start = QTimer(self)
+        self._detect_start.setSingleShot(True)
+        self._detect_start.timeout.connect(self._start_detection)
         self._startup_timer = QTimer(self)
         self._startup_timer.setInterval(_STARTUP_TICK_MS)
         self._startup_timer.timeout.connect(self._on_startup_tick)
@@ -323,7 +323,6 @@ class HomeWindow(QWidget):
 
     def _on_play_clicked(self) -> None:
         self._hide_tip()
-        self._cancel_peek_resume()
         if self._running:
             self._stop_running()
             return
@@ -349,7 +348,7 @@ class HomeWindow(QWidget):
             return
         log.info("play: begin running")
         self._stop_idle_glint()
-        self._cancel_peek_resume()
+        self._detect_start.stop()
         self._running = True
         self._alerting = False
         self._shot_cool = False
@@ -365,10 +364,23 @@ class HomeWindow(QWidget):
         self._overlay.clear_scene()
         self._overlay.show()
         self.raise_()
+        self._arm_detection()
+
+    def _arm_detection(self) -> None:
+        self._detect_start.stop()
+        ms = self._voice.play_ready()
+        if ms <= 0:
+            self._start_detection()
+            return
+        log.info("ready tone %dms before detection", ms)
+        self._detect_start.start(ms)
+
+    def _start_detection(self) -> None:
+        if not self._running or self.monitor_region is None:
+            return
         if not self._runtime.start(self.monitor_region):
             log.error("runtime.start failed, stopping")
             self._stop_running()
-            return
 
     def _stop_running(self) -> None:
         if self._running:
@@ -378,6 +390,7 @@ class HomeWindow(QWidget):
         self._shot_cool = False
         self._shot_kinds = frozenset()
         self._cooldown.stop()
+        self._detect_start.stop()
         self._voice.stop()
         self._alert.reset()
         self.btn_play.set_toggled(False)
@@ -494,8 +507,10 @@ class HomeWindow(QWidget):
             if settings.auto_open_image:
                 if self._running:
                     self._stop_running()
-                if settings.voice_alert:
-                    self._voice.loop_until_move(alert.voice_kind)
+                self._voice.loop_until_move(
+                    alert.voice_kind if settings.voice_alert else None,
+                    idle_ms=T.PEEK_IDLE_MS,
+                )
                 self._open_alert_image(path)
                 scheduled = True
         self._shot_cool = True
@@ -514,7 +529,7 @@ class HomeWindow(QWidget):
         log.info("app shutdown running=%s", self._running)
         self._stop_startup_effect()
         self._stop_idle_glint()
-        self._cancel_peek_resume()
+        self._detect_start.stop()
         self._list_panel.dismiss_peek()
         self._cooldown.stop()
         self._voice.stop()
@@ -533,7 +548,6 @@ class HomeWindow(QWidget):
     def _on_select_clicked(self) -> None:
         if self._running or self._picker is not None:
             return
-        self._cancel_peek_resume()
         self._list_panel.dismiss_peek()
         self._hide_tip()
         self._list_panel.hide()
@@ -587,7 +601,6 @@ class HomeWindow(QWidget):
         if not self.isVisible() and self._picker is not None:
             return
         already_open = self._list_panel.isVisible() or self._stats_panel.isVisible()
-        self._cancel_peek_resume()
         self._list_panel.dismiss_peek()
         self._hide_tip()
         self._settings_panel.hide()
@@ -612,15 +625,17 @@ class HomeWindow(QWidget):
         self.raise_()
         self.activateWindow()
 
-    def _cancel_peek_resume(self) -> None:
-        self._peek_resume.stop()
-
     def _open_alert_image(self, path) -> None:
         if path is None or not path.is_file():
             return
-        self._cancel_peek_resume()
         log.info("alert image opened auto=1 path=%s", path.name)
         self._list_panel.open_saved_image(path, self._capsule_global())
+
+    def _on_auto_peek_idle(self) -> None:
+        if getattr(self, "_did_shutdown", False):
+            return
+        log.info("auto image idle %dms; close as if X", T.PEEK_IDLE_MS)
+        self._list_panel.close_peek()
 
     def _on_peek_closed(self, auto_opened: bool) -> None:
         if not auto_opened:
@@ -630,15 +645,8 @@ class HomeWindow(QWidget):
             return
         if self.monitor_region is None or self._running:
             return
-        log.info("auto image closed; resume monitoring in 3s")
-        self._peek_resume.start()
-
-    def _on_peek_resume(self) -> None:
-        if getattr(self, "_did_shutdown", False):
-            return
-        if self.monitor_region is not None and not self._running:
-            log.info("resume monitoring after auto image")
-            self._begin_running()
+        log.info("auto image closed; resume monitoring now")
+        self._begin_running()
 
     def _on_btn_hover(self, btn: MetalButton) -> None:
         self._tip_btn = btn

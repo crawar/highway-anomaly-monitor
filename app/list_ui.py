@@ -972,6 +972,11 @@ class AlertListWindow(QWidget):
     def dismiss_peek(self) -> None:
         self._peek.dismiss()
 
+    def close_peek(self) -> None:
+        """Hide the viewer the same way as clicking X (emits closed)."""
+        if self._peek.isVisible():
+            self._peek.hide()
+
     def _mark_false_positive(self, record: AlertRecord) -> None:
         src = record.path
         if not src.is_file():

@@ -19,6 +19,7 @@ DOWNLOAD_DIR = ROOT / "Download"
 WARNING_DIR = ROOT / "warning"
 INTRUSION_WAV = WARNING_DIR / "Pwarning.wav"
 PARKING_WAV = WARNING_DIR / "Vwarning.wav"
+READY_WAV = WARNING_DIR / "Rwarning.wav"
 WEIGHTS_NAME = "yolo26l.pt"
 WEIGHTS_FILE = DOWNLOAD_DIR / WEIGHTS_NAME
 CONFIG_FILE = ROOT / "config.json"

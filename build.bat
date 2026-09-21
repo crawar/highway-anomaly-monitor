@@ -7,7 +7,7 @@ if /I "%~1"=="nopause" set "SKIP_PAUSE=1"
 set "PY=%~dp0.venv\Scripts\python.exe"
 set "WEIGHTS=%~dp0Download\yolo26l.pt"
 
-:: Version comes from app\__init__.py (VERSION = "V1.1.1"); the package folder
+:: Version comes from app\__init__.py (VERSION = "V1.1.2"); the package folder
 :: is dist\CarFind-<version> so several versions can sit side by side.
 set "VER="
 for /f "tokens=2 delims==" %%v in ('findstr /b /c:"VERSION" "%~dp0app\__init__.py"') do set "VER=%%v"
@@ -48,6 +48,12 @@ if not exist "%~dp0warning\Pwarning.wav" (
 
 if not exist "%~dp0warning\Vwarning.wav" (
     echo Missing warning\Vwarning.wav
+    if not defined SKIP_PAUSE pause
+    exit /b 1
+)
+
+if not exist "%~dp0warning\Rwarning.wav" (
+    echo Missing warning\Rwarning.wav
     if not defined SKIP_PAUSE pause
     exit /b 1
 )
@@ -104,6 +110,7 @@ if errorlevel 1 (
 
 copy /Y "%~dp0warning\Pwarning.wav" "%OUT%\warning\Pwarning.wav" >nul
 copy /Y "%~dp0warning\Vwarning.wav" "%OUT%\warning\Vwarning.wav" >nul
+copy /Y "%~dp0warning\Rwarning.wav" "%OUT%\warning\Rwarning.wav" >nul
 if errorlevel 1 (
     echo Failed to copy warning wav files
     if not defined SKIP_PAUSE pause

@@ -35,8 +35,11 @@ DETECT_FLOOR = 0.05
 # and adapts to the interval, so alert behaviour is unchanged.
 DEFAULT_INTERVAL = 3.0
 INTERVAL_STEPS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
-DEFAULT_CONF = 0.5
-DEFAULT_INTRUSION_CONF = 0.5
+DEFAULT_CONF = 0.45
+DEFAULT_INTRUSION_CONF = 0.45
+# Auto-opened image viewer: no mouse move within this window closes it
+# the same way as clicking the X, then monitoring resumes immediately.
+PEEK_IDLE_MS = 30_000
 DEFAULT_COOLDOWN = 30
 COOLDOWN_MIN = 30
 COOLDOWN_MAX = 300

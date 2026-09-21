@@ -6,11 +6,11 @@ import wave
 import winsound
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QCursor
 
 from app import diag
-from app.paths import INTRUSION_WAV, PARKING_WAV
+from app.paths import INTRUSION_WAV, PARKING_WAV, READY_WAV
 
 log = diag.setup("ui")
 
@@ -60,6 +60,8 @@ class VoicePlayer(QObject):
     stop() still interrupts immediately.
     """
 
+    idle_timeout = Signal()
+
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._wanted: str | None = None
@@ -74,6 +76,9 @@ class VoicePlayer(QObject):
         self._arm.setSingleShot(True)
         self._arm.setInterval(220)
         self._arm.timeout.connect(self._arm_watch)
+        self._idle = QTimer(self)
+        self._idle.setSingleShot(True)
+        self._idle.timeout.connect(self._on_idle)
         self._watch_pos = None
         self._watch_armed = False
 
@@ -86,6 +91,22 @@ class VoicePlayer(QObject):
         self._start(kind)
         return duration_ms(_KIND_PATH[kind]) + 80 if self._playing else 0
 
+    def play_ready(self) -> int:
+        """Play the monitor-start chime once. Returns duration in ms."""
+        return self.play_clip(READY_WAV)
+
+    def play_clip(self, path) -> int:
+        """Play a file once and do not repeat. Returns duration in ms."""
+        self.stop()
+        ms = play_once(path)
+        if ms <= 0:
+            self._playing = False
+            return 0
+        self._wanted = None
+        self._playing = True
+        self._done.start(ms)
+        return ms
+
     def update(self, kind: str | None) -> None:
         self._wanted = kind if kind in _KIND_PATH else None
         if self._playing:
@@ -94,15 +115,20 @@ class VoicePlayer(QObject):
             return
         self._start(self._wanted)
 
-    def loop_until_move(self, kind: str | None) -> None:
-        """Keep repeating an alert clip until the cursor actually moves."""
+    def loop_until_move(self, kind: str | None, idle_ms: int = 0) -> None:
+        """Repeat an alert clip until the cursor moves.
+
+        If idle_ms > 0 and the cursor never moves in that window, stop and
+        emit idle_timeout. kind may be None to only watch the cursor.
+        """
         self.stop()
-        if kind not in _KIND_PATH:
-            return
-        self.update(kind)
+        if kind in _KIND_PATH:
+            self.update(kind)
         self._watch_pos = QCursor.pos()
         self._watch_armed = False
         self._arm.start()
+        if idle_ms > 0:
+            self._idle.start(int(idle_ms))
 
     def stop(self) -> None:
         self._wanted = None
@@ -110,6 +136,7 @@ class VoicePlayer(QObject):
         self._done.stop()
         self._arm.stop()
         self._watch.stop()
+        self._idle.stop()
         self._watch_armed = False
         self._watch_pos = None
         stop()
@@ -128,6 +155,10 @@ class VoicePlayer(QObject):
         dy = abs(cur.y() - self._watch_pos.y())
         if dx + dy >= 8:
             self.stop()
+
+    def _on_idle(self) -> None:
+        self.stop()
+        self.idle_timeout.emit()
 
     def _start(self, kind: str) -> None:
         ms = play_once(_KIND_PATH[kind])
