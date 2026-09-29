@@ -33,10 +33,10 @@ MIN_REGION = 8
 DETECT_FLOOR = 0.05
 # 3 s keeps peak CPU lower than 2 s; parking hold is frame-count based
 # and adapts to the interval, so alert behaviour is unchanged.
-DEFAULT_INTERVAL = 3.0
+DEFAULT_INTERVAL = 2.5
 INTERVAL_STEPS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
-DEFAULT_CONF = 0.45
-DEFAULT_INTRUSION_CONF = 0.45
+DEFAULT_CONF = 0.5
+DEFAULT_INTRUSION_CONF = 0.5
 # Auto-opened image viewer: no mouse move within this window closes it
 # the same way as clicking the X, then monitoring resumes immediately.
 PEEK_IDLE_MS = 30_000
@@ -44,13 +44,18 @@ DEFAULT_COOLDOWN = 30
 COOLDOWN_MIN = 30
 COOLDOWN_MAX = 300
 COOLDOWN_STEPS = tuple(range(30, 301, 30))
-DEFAULT_PARKING_HOLD = 9
+DEFAULT_PARKING_HOLD = 10
 PARKING_HOLD_MIN = 5
 PARKING_HOLD_MAX = 12
 MIN_PARKING_FRAMES = 3
 DEFAULT_PARKING_GRACE = 2
 PARKING_GRACE_MIN = 0
 PARKING_GRACE_MAX = 3
+DEFAULT_CONGESTION_COUNT = 10
+CONGESTION_COUNT_MIN = 5
+CONGESTION_COUNT_MAX = 20
+CONGESTION_COUNT_STEPS = (5, 10, 15, 20)
+CONGESTION_FRAMES = 2
 # Hard cap on live vehicle tracks. Kept above YOLO's max_det (300) so a single
 # frame's detections always fit; only stale / missing tracks ever get cut.
 MAX_PARKING_TRACKS = 400

@@ -35,12 +35,13 @@ from app.paths import ensure_false_positive_dir, ensure_pic_dir
 from app.win32util import apply_capture_affinity, disable_system_rounding
 
 _NAME_RE = re.compile(
-    r"^(P|V|PV)(\d{8})-(\d{6})(?:_(\d+))?\.png$",
+    r"^(PV|B|P|V)(\d{8})-(\d{6})(?:_(\d+))?\.png$",
     re.IGNORECASE,
 )
 _KIND_LABEL = {
     "P": "闯入",
     "V": "违停",
+    "B": "拥堵",
     "PV": "违停+闯入",
 }
 
@@ -232,6 +233,8 @@ class AlertRow(QWidget):
             p.setPen(T.BOX_ALERT)
         elif self._record.kind == "V":
             p.setPen(T.ICON_YELLOW)
+        elif self._record.kind == "B":
+            p.setPen(QColor(255, 148, 48))
         else:
             p.setPen(T.BOX_HIGH)
         p.drawText(

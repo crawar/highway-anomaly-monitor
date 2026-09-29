@@ -29,9 +29,10 @@ def _tally(
     start: date,
     end: date,
     split_multi: bool,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     parking = 0
     intrusion = 0
+    congestion = 0
     both = 0
     lo, hi = (start, end) if start <= end else (end, start)
     for item in records:
@@ -46,9 +47,11 @@ def _tally(
                 both += 1
         elif item.kind == "V":
             parking += 1
+        elif item.kind == "B":
+            congestion += 1
         elif item.kind == "P":
             intrusion += 1
-    return parking, intrusion, both
+    return parking, intrusion, congestion, both
 
 
 class MetalCalendar(QWidget):
@@ -608,24 +611,32 @@ class StatsWindow(QWidget):
             self._hover == "end",
         )
 
-        parking, intrusion, both = _tally(self._records, self._start, self._end, self._split)
+        parking, intrusion, congestion, both = _tally(self._records, self._start, self._end, self._split)
+        congestion_color = QColor(255, 148, 48)
         if self._split:
-            slices = [(parking, T.ICON_YELLOW), (intrusion, T.BOX_HIGH)]
-            total = parking + intrusion
+            slices = [
+                (parking, T.ICON_YELLOW),
+                (intrusion, T.BOX_HIGH),
+                (congestion, congestion_color),
+            ]
+            total = parking + intrusion + congestion
             rows = [
                 ("违停", T.ICON_YELLOW, parking, _pct(parking, total)),
                 ("闯入", T.BOX_HIGH, intrusion, _pct(intrusion, total)),
+                ("拥堵", congestion_color, congestion, _pct(congestion, total)),
             ]
         else:
             slices = [
                 (parking, T.ICON_YELLOW),
                 (intrusion, T.BOX_HIGH),
+                (congestion, congestion_color),
                 (both, T.BOX_ALERT),
             ]
-            total = parking + intrusion + both
+            total = parking + intrusion + congestion + both
             rows = [
                 ("违停", T.ICON_YELLOW, parking, _pct(parking, total)),
                 ("闯入", T.BOX_HIGH, intrusion, _pct(intrusion, total)),
+                ("拥堵", congestion_color, congestion, _pct(congestion, total)),
                 ("违停+闯入", T.BOX_ALERT, both, _pct(both, total)),
             ]
         self._paint_pie(p, slices)

@@ -1,8 +1,17 @@
 # Highway Anomaly Monitor
 
-高速公路异常监测（CarFind **V1.1.2**）。Windows 11 透明 HUD：框选监视区域后，用 YOLO 检测违停车辆与闯入目标，并支持语音、截图和钉钉推送。
+高速公路异常监测（CarFind **V1.2.0**）。Windows 11 透明 HUD：框选监视区域后，用 YOLO 检测违停车辆、拥堵与闯入目标，并支持语音、截图和钉钉推送。
 
 **Author:** [crawar](https://github.com/crawar)
+
+## V1.2.0
+
+本版本增加拥堵报警，并把设置按报警类型分页。安装包不再附带 `config.json`。
+
+- **拥堵**：连续 2 帧车辆数达到设定值才报警。同一帧只报一种，优先级为违停、拥堵、闯入。拥堵提示音为 `warning/Bwarning.wav`。
+- **设置分页**：主要页保留监测间隔、车辆置信度、报警冷却和勾选框；违停、闯入、拥堵各自一页。
+- **未设区域可启动**：未框选时点启动会提示将以主显示器全屏监测，5 秒后默认继续。
+- **安装包**：`build.bat` 不再复制 `config.json`，避免钉钉密钥进入分发包。程序在首次保存设置时于 exe 旁生成该文件。
 
 ## V1.1.2
 
@@ -37,15 +46,16 @@ Release 说明：https://github.com/ultralytics/assets/releases/tag/v8.4.0
 4. 将 `yolo26l.pt` 放入 `Download/`。
 5. 双击 `run.bat`，或执行 `.venv\Scripts\python.exe -m app`。
 
-打包：确认权重、本地 `config.json` 和 `warning/*.wav` 齐全后运行 `build.bat`。版本号取自 `app/__init__.py` 的 `VERSION`，产物目录为 `dist/CarFind-<版本号>/`（如 `dist/CarFind-V1.1.2/`），旧版本目录会保留；`dist/` 不会提交到本仓库。打包目录里的 `config.json` 仅供本机使用，不要把含密钥的整包上传到 GitHub。
+打包：确认权重和 `warning/*.wav` 齐全后运行 `build.bat`。版本号取自 `app/__init__.py` 的 `VERSION`，产物目录为 `dist/CarFind-<版本号>/`（如 `dist/CarFind-V1.2.0/`），旧版本目录会保留；`dist/` 不会提交到本仓库。安装包不包含 `config.json`，以免带上钉钉密钥；首次在程序里保存设置时，会在 exe 旁边生成该文件。
 
 ## 主要设置（`config.json`）
 
-- `interval_sec`：监测间隔，默认 3.0 秒。违停判定按帧数自适应。
-- `parking_hold_sec`：违停时间，默认 9 秒。
-- `parking_conf` / `intrusion_conf`：置信度阈值，默认 0.45。
+- `interval_sec`：监测间隔，默认 2.5 秒。违停判定按帧数自适应。
+- `parking_hold_sec`：违停时间，默认 10 秒。
+- `parking_conf` / `intrusion_conf`：车辆置信度与闯入置信度，默认 0.50。
+- `congestion_alert` / `congestion_count`：侦测拥堵，默认开启；拥堵车辆数默认 10，只取 5、10、15、20。
 - `debug_mode`：调试模式。勾选后实时窗口和存图会显示全部识别框；关闭时实时窗口不画绿框，存图只保留红框。
-- `auto_open_image`：预警后自动打开图片。勾选后报警会停监测、存图并弹出查看器；语音循环到鼠标移动才停。30 秒内鼠标未移动则关闭查看器并立即恢复监测；手动关闭同样立即恢复。
+- `auto_open_image`：预警后自动打开图片，默认勾选。勾选后报警会停监测、存图并弹出查看器；语音循环到鼠标移动才停。30 秒内鼠标未移动则关闭查看器并立即恢复监测；手动关闭同样立即恢复。
 - `gaze_guidance`：视线引导。单红框会渐进放大居中；多红框会闪红圈。
 - `cooldown_sec`：报警冷却。同样影响钉钉，仅在未启用 `auto_open_image` 时生效。
 - `worker_threads`：检测进程的 torch 线程数，默认 4（1–16）。

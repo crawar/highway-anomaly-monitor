@@ -1,4 +1,4 @@
-"""Alert evaluation: intrusion and parking are judged together."""
+"""Alert evaluation: one kind per frame, parking then congestion then intrusion."""
 
 from __future__ import annotations
 
@@ -56,47 +56,59 @@ def _above(items: list[dict], threshold: float) -> list[dict]:
 class Alert:
     intrusion: list[dict] = field(default_factory=list)
     parking: list[dict] = field(default_factory=list)
+    congestion: list[dict] = field(default_factory=list)
 
     @property
     def active(self) -> bool:
-        return bool(self.intrusion or self.parking)
+        return bool(self.intrusion or self.parking or self.congestion)
 
     @property
     def items(self) -> list[dict]:
-        return list(self.parking) + list(self.intrusion)
+        if self.parking:
+            return list(self.parking)
+        if self.congestion:
+            return list(self.congestion)
+        return list(self.intrusion)
 
     @property
     def voice_kind(self) -> str | None:
         if self.parking:
             return "parking"
+        if self.congestion:
+            return "congestion"
         if self.intrusion:
             return "intrusion"
         return None
 
     @property
     def kinds(self) -> frozenset[str]:
-        names: set[str] = set()
-        if self.intrusion:
-            names.add("intrusion")
         if self.parking:
-            names.add("parking")
-        return frozenset(names)
+            return frozenset({"parking"})
+        if self.congestion:
+            return frozenset({"congestion"})
+        if self.intrusion:
+            return frozenset({"intrusion"})
+        return frozenset()
 
     @property
     def prefix(self) -> str:
-        if self.parking and self.intrusion:
-            return "PV"
         if self.parking:
             return "V"
-        return "P"
+        if self.congestion:
+            return "B"
+        if self.intrusion:
+            return "P"
+        return ""
 
     @property
     def kind_label(self) -> str:
-        if self.parking and self.intrusion:
-            return "违停+闯入"
         if self.parking:
             return "违停"
-        return "闯入"
+        if self.congestion:
+            return "拥堵"
+        if self.intrusion:
+            return "闯入"
+        return ""
 
 
 @dataclass
@@ -213,9 +225,11 @@ def parking_frames(interval_sec: float, hold_sec: float) -> int:
 class AlertEngine:
     def __init__(self) -> None:
         self._tracker = VehicleTracker()
+        self._congestion_streak = 0
 
     def reset(self) -> None:
         self._tracker.reset()
+        self._congestion_streak = 0
 
     def evaluate(
         self,
@@ -224,19 +238,45 @@ class AlertEngine:
         settings: AppSettings,
     ) -> Alert:
         result = Alert()
-        if settings.intrusion_alert:
-            result.intrusion = _above(intrusion, settings.intrusion_conf)
+        parking_fired = False
+        parking_hits: list[dict] = []
         if settings.parking_alert:
             need = parking_frames(settings.interval_sec, settings.parking_hold_sec)
-            fired, hits = self._tracker.update(
+            parking_fired, parking_hits = self._tracker.update(
                 parking,
                 need,
                 settings.parking_grace_frames,
                 settings.parking_conf,
             )
-            if fired:
-                result.parking = hits
-                self._tracker.clear_counts()
         else:
             self._tracker.reset()
+
+        congestion_fired = False
+        congestion_hits: list[dict] = []
+        if settings.congestion_alert:
+            vehicles = _above(parking, settings.parking_conf)
+            if len(vehicles) >= int(settings.congestion_count):
+                self._congestion_streak += 1
+            else:
+                self._congestion_streak = 0
+            if self._congestion_streak >= T.CONGESTION_FRAMES:
+                congestion_fired = True
+                congestion_hits = vehicles
+        else:
+            self._congestion_streak = 0
+
+        intrusion_hits: list[dict] = []
+        if settings.intrusion_alert:
+            intrusion_hits = _above(intrusion, settings.intrusion_conf)
+
+        if parking_fired:
+            result.parking = parking_hits
+        elif congestion_fired:
+            result.congestion = congestion_hits
+        elif intrusion_hits:
+            result.intrusion = intrusion_hits
+
+        if result.active:
+            self._tracker.clear_counts()
+            self._congestion_streak = 0
         return result

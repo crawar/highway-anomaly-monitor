@@ -173,6 +173,8 @@ def settings_summary(settings) -> str:
         "intrusion_conf",
         "intrusion_alert",
         "parking_alert",
+        "congestion_alert",
+        "congestion_count",
         "voice_alert",
         "auto_open_image",
         "gaze_guidance",

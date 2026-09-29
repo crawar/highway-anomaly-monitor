@@ -101,6 +101,12 @@ def _fmt_interval(value: float) -> str:
     return f"{value:.1f}s"
 
 
+def _congestion_t(value: float) -> float:
+    steps = T.CONGESTION_COUNT_STEPS
+    idx = min(range(len(steps)), key=lambda i: abs(steps[i] - value))
+    return idx / (len(steps) - 1)
+
+
 class SettingsPanel(QWidget):
     changed = Signal(object)
 
@@ -122,24 +128,47 @@ class SettingsPanel(QWidget):
         self._hover = ""
         self._chrome_ready = False
         groove_w = self.width() - 146
-        self._tab_main = QRect(self.width() - 18 - 56 - 8 - 52, 8, 52, 26)
-        self._tab_ding = QRect(self.width() - 18 - 56, 8, 56, 26)
+        tab_w = 50
+        tab_gap = 6
+        tab_titles = (
+            ("main", "主要"),
+            ("parking", "违停"),
+            ("intrusion", "闯入"),
+            ("congestion", "拥堵"),
+            ("ding", "钉钉"),
+        )
+        tab_total = len(tab_titles) * tab_w + (len(tab_titles) - 1) * tab_gap
+        tab_left = (self.width() - tab_total) // 2
+        self._tabs = {
+            key: QRect(tab_left + i * (tab_w + tab_gap), 36, tab_w, 26)
+            for i, (key, _title) in enumerate(tab_titles)
+        }
+        self._tab_titles = dict(tab_titles)
+        self._tab_sliders = {
+            "main": ("interval", "parking", "cooldown"),
+            "parking": ("hold", "grace"),
+            "intrusion": ("intrusion",),
+            "congestion": ("congestion",),
+            "ding": (),
+        }
         self._sliders = {
-            "interval": QRect(126, 52, groove_w, 16),
-            "hold": QRect(126, 94, groove_w, 16),
-            "grace": QRect(126, 136, groove_w, 16),
-            "parking": QRect(126, 178, groove_w, 16),
-            "intrusion": QRect(126, 220, groove_w, 16),
-            "cooldown": QRect(126, 262, groove_w, 16),
+            "interval": QRect(126, 86, groove_w, 16),
+            "parking": QRect(126, 128, groove_w, 16),
+            "cooldown": QRect(126, 170, groove_w, 16),
+            "hold": QRect(126, 86, groove_w, 16),
+            "grace": QRect(126, 128, groove_w, 16),
+            "intrusion": QRect(126, 86, groove_w, 16),
+            "congestion": QRect(126, 86, groove_w, 16),
         }
         self._checks = {
-            "show_labels": QRect(18, 308, 18, 18),
-            "intrusion_alert": QRect(158, 308, 18, 18),
-            "parking_alert": QRect(18, 338, 18, 18),
-            "voice_alert": QRect(158, 338, 18, 18),
-            "debug_mode": QRect(18, 368, 18, 18),
-            "gaze_guidance": QRect(158, 368, 18, 18),
-            "auto_open_image": QRect(18, 398, 18, 18),
+            "show_labels": QRect(18, 220, 18, 18),
+            "intrusion_alert": QRect(158, 220, 18, 18),
+            "parking_alert": QRect(18, 250, 18, 18),
+            "voice_alert": QRect(158, 250, 18, 18),
+            "debug_mode": QRect(18, 280, 18, 18),
+            "gaze_guidance": QRect(158, 280, 18, 18),
+            "auto_open_image": QRect(18, 310, 18, 18),
+            "congestion_alert": QRect(18, 340, 18, 18),
         }
         self._check_labels = {
             "show_labels": "显示标签",
@@ -149,39 +178,40 @@ class SettingsPanel(QWidget):
             "debug_mode": "调试模式",
             "auto_open_image": "预警后自动打开图片",
             "gaze_guidance": "视线引导",
+            "congestion_alert": "侦测拥堵",
         }
-        self._ding_check = QRect(18, 48, 18, 18)
-        self._btn_help = QRect(self.width() - 18 - 92, 46, 92, 26)
+        self._ding_check = QRect(18, 76, 18, 18)
+        self._btn_help = QRect(self.width() - 18 - 92, 74, 92, 26)
         self._fields = {
             "ding_app_key": {
                 "label": "Client ID",
-                "label_rect": QRect(18, 78, 180, 18),
-                "edit": QRect(18, 98, self.width() - 64, 28),
-                "eye": QRect(self.width() - 42, 100, 24, 24),
+                "label_rect": QRect(18, 106, 180, 18),
+                "edit": QRect(18, 126, self.width() - 64, 28),
+                "eye": QRect(self.width() - 42, 128, 24, 24),
             },
             "ding_app_secret": {
                 "label": "Client Secret",
-                "label_rect": QRect(18, 136, 180, 18),
-                "edit": QRect(18, 156, self.width() - 64, 28),
-                "eye": QRect(self.width() - 42, 158, 24, 24),
+                "label_rect": QRect(18, 164, 180, 18),
+                "edit": QRect(18, 184, self.width() - 64, 28),
+                "eye": QRect(self.width() - 42, 186, 24, 24),
             },
             "ding_keyword": {
                 "label": "自定义关键词",
-                "label_rect": QRect(18, 194, 180, 18),
-                "edit": QRect(18, 214, self.width() - 64, 28),
-                "eye": QRect(self.width() - 42, 216, 24, 24),
+                "label_rect": QRect(18, 222, 180, 18),
+                "edit": QRect(18, 242, self.width() - 64, 28),
+                "eye": QRect(self.width() - 42, 244, 24, 24),
             },
             "ding_secret": {
                 "label": "加签",
-                "label_rect": QRect(18, 252, 180, 18),
-                "edit": QRect(18, 272, self.width() - 64, 28),
-                "eye": QRect(self.width() - 42, 274, 24, 24),
+                "label_rect": QRect(18, 280, 180, 18),
+                "edit": QRect(18, 300, self.width() - 64, 28),
+                "eye": QRect(self.width() - 42, 302, 24, 24),
             },
             "ding_webhook": {
                 "label": "Webhook",
-                "label_rect": QRect(18, 310, 180, 18),
-                "edit": QRect(18, 330, self.width() - 64, 28),
-                "eye": QRect(self.width() - 42, 332, 24, 24),
+                "label_rect": QRect(18, 338, 180, 18),
+                "edit": QRect(18, 358, self.width() - 64, 28),
+                "eye": QRect(self.width() - 42, 360, 24, 24),
             },
         }
         self._reveal = {key: False for key in self._fields}
@@ -198,7 +228,7 @@ class SettingsPanel(QWidget):
                 edit.textChanged.connect(self.update)
             self._edits[key] = edit
         self._help_scroll = QScrollArea(self)
-        self._help_scroll.setGeometry(14, 80, self.width() - 28, self.height() - 140)
+        self._help_scroll.setGeometry(14, 108, self.width() - 28, self.height() - 176)
         self._help_scroll.setWidgetResizable(True)
         self._help_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self._help_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -329,6 +359,10 @@ class SettingsPanel(QWidget):
             last = len(T.COOLDOWN_STEPS) - 1
             idx = int(round(t * last))
             self._settings.cooldown_sec = T.COOLDOWN_STEPS[max(0, min(last, idx))]
+        elif key == "congestion":
+            last = len(T.CONGESTION_COUNT_STEPS) - 1
+            idx = int(round(t * last))
+            self._settings.congestion_count = T.CONGESTION_COUNT_STEPS[max(0, min(last, idx))]
         self._settings.clamp()
         if key == "interval":
             self._show_interval_tip()
@@ -370,21 +404,28 @@ class SettingsPanel(QWidget):
         top_left = self.mapToGlobal(self._slider_area("cooldown").topLeft())
         self._tip.popup(COOLDOWN_TIP, QRect(top_left, self._slider_area("cooldown").size()))
 
+    def _visible_sliders(self) -> tuple[str, ...]:
+        return self._tab_sliders.get(self._tab, ())
+
+    def _tab_at(self, pos) -> str:
+        for key, rect in self._tabs.items():
+            if rect.contains(pos):
+                return key
+        return ""
+
+    def _select_tab(self, key: str) -> None:
+        self._tab = key
+        self._help_open = False
+        self._drag = None
+        self._tip.hide()
+        self._apply_tab()
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         pos = event.position().toPoint()
         if event.button() == Qt.MouseButton.LeftButton:
-            if self._tab_main.contains(pos):
-                self._tab = "main"
-                self._help_open = False
-                self._tip.hide()
-                self._apply_tab()
-                event.accept()
-                return
-            if self._tab_ding.contains(pos):
-                self._tab = "ding"
-                self._help_open = False
-                self._tip.hide()
-                self._apply_tab()
+            tab = self._tab_at(pos)
+            if tab:
+                self._select_tab(tab)
                 event.accept()
                 return
             if self._btn_save.contains(pos):
@@ -424,14 +465,16 @@ class SettingsPanel(QWidget):
                         return
                 event.accept()
                 return
-            for key in self._checks:
-                if self._check_hit(key, pos):
-                    cur = bool(getattr(self._settings, key))
-                    setattr(self._settings, key, not cur)
-                    self.update()
-                    event.accept()
-                    return
-            for key, rect in self._sliders.items():
+            if self._tab == "main":
+                for key in self._checks:
+                    if self._check_hit(key, pos):
+                        cur = bool(getattr(self._settings, key))
+                        setattr(self._settings, key, not cur)
+                        self.update()
+                        event.accept()
+                        return
+            for key in self._visible_sliders():
+                rect = self._sliders[key]
                 hit = QRect(rect.x() - 8, rect.y() - 8, rect.width() + 16, rect.height() + 16)
                 if hit.contains(pos):
                     self._drag = key
@@ -450,15 +493,13 @@ class SettingsPanel(QWidget):
             hover = "save"
         elif self._btn_cancel.contains(pos):
             hover = "cancel"
-        elif self._tab_main.contains(pos):
-            hover = "tab_main"
-        elif self._tab_ding.contains(pos):
-            hover = "tab_ding"
+        elif self._tab_at(pos):
+            hover = f"tab_{self._tab_at(pos)}"
         elif self._tab == "main" and self._slider_area("interval").contains(pos):
             hover = "interval"
-        elif self._tab == "main" and self._slider_area("hold").contains(pos):
+        elif self._tab == "parking" and self._slider_area("hold").contains(pos):
             hover = "hold"
-        elif self._tab == "main" and self._slider_area("grace").contains(pos):
+        elif self._tab == "parking" and self._slider_area("grace").contains(pos):
             hover = "grace"
         elif self._tab == "main" and self._slider_area("cooldown").contains(pos):
             hover = "cooldown"
@@ -511,12 +552,24 @@ class SettingsPanel(QWidget):
         _paint_metal_panel(p, body, 16.0)
         p.setFont(_ui_font(13))
         p.setPen(T.SETTINGS_TEXT)
-        p.drawText(QRect(18, 10, 80, 22), Qt.AlignmentFlag.AlignVCenter, "设置")
-        self._paint_tab(p, self._tab_main, "主要", self._tab == "main", self._hover == "tab_main")
-        self._paint_tab(p, self._tab_ding, "钉钉", self._tab == "ding", self._hover == "tab_ding")
+        p.drawText(QRect(18, 8, 80, 24), Qt.AlignmentFlag.AlignVCenter, "设置")
+        for key, title in self._tab_titles.items():
+            self._paint_tab(
+                p,
+                self._tabs[key],
+                title,
+                self._tab == key,
+                self._hover == f"tab_{key}",
+            )
 
         if self._tab == "main":
             self._paint_main(p)
+        elif self._tab == "parking":
+            self._paint_parking(p)
+        elif self._tab == "intrusion":
+            self._paint_intrusion(p)
+        elif self._tab == "congestion":
+            self._paint_congestion(p)
         elif self._help_open:
             self._paint_button(p, self._btn_help, "返回", self._hover == "help")
         else:
@@ -531,6 +584,23 @@ class SettingsPanel(QWidget):
             self._sliders["interval"], _interval_t(self._settings.interval_sec),
         )
         self._paint_slider(
+            p, "车辆置信度", f"{self._settings.parking_conf:.2f}",
+            self._sliders["parking"], _t_of(self._settings.parking_conf, 0.05, 0.95),
+        )
+        self._paint_slider(
+            p, "报警冷却", _fmt_cooldown(self._settings.cooldown_sec),
+            self._sliders["cooldown"],
+            _cooldown_t(self._settings.cooldown_sec),
+        )
+        for key, rect in self._checks.items():
+            label_w = 240 if key == "auto_open_image" else 110
+            self._paint_check(
+                p, rect, bool(getattr(self._settings, key)),
+                self._check_labels[key], self._hover == key, label_w,
+            )
+
+    def _paint_parking(self, p: QPainter) -> None:
+        self._paint_slider(
             p, "违停时间", f"{self._settings.parking_hold_sec}s",
             self._sliders["hold"],
             _t_of(float(self._settings.parking_hold_sec), float(T.PARKING_HOLD_MIN), float(T.PARKING_HOLD_MAX)),
@@ -544,25 +614,18 @@ class SettingsPanel(QWidget):
                 float(T.PARKING_GRACE_MAX),
             ),
         )
-        self._paint_slider(
-            p, "违停置信度", f"{self._settings.parking_conf:.2f}",
-            self._sliders["parking"], _t_of(self._settings.parking_conf, 0.05, 0.95),
-        )
+
+    def _paint_intrusion(self, p: QPainter) -> None:
         self._paint_slider(
             p, "闯入置信度", f"{self._settings.intrusion_conf:.2f}",
             self._sliders["intrusion"], _t_of(self._settings.intrusion_conf, 0.05, 0.95),
         )
+
+    def _paint_congestion(self, p: QPainter) -> None:
         self._paint_slider(
-            p, "报警冷却", _fmt_cooldown(self._settings.cooldown_sec),
-            self._sliders["cooldown"],
-            _cooldown_t(self._settings.cooldown_sec),
+            p, "拥堵车辆数", f"{self._settings.congestion_count}台",
+            self._sliders["congestion"], _congestion_t(self._settings.congestion_count),
         )
-        for key, rect in self._checks.items():
-            label_w = 240 if key == "auto_open_image" else 110
-            self._paint_check(
-                p, rect, bool(getattr(self._settings, key)),
-                self._check_labels[key], self._hover == key, label_w,
-            )
 
     def _paint_ding(self, p: QPainter) -> None:
         self._paint_check(
@@ -584,7 +647,7 @@ class SettingsPanel(QWidget):
             p.setFont(_ui_font(11))
             p.setPen(T.BOX_ALERT)
             p.drawText(
-                QRect(18, 364, self.width() - 36, 36),
+                QRect(18, 396, self.width() - 36, 36),
                 Qt.AlignmentFlag.AlignTop
                 | Qt.AlignmentFlag.AlignLeft
                 | Qt.TextFlag.TextWordWrap,
@@ -593,7 +656,7 @@ class SettingsPanel(QWidget):
         p.setFont(_ui_font(11))
         p.setPen(T.SETTINGS_MUTED)
         p.drawText(
-            QRect(18, 400, self.width() - 36, 36),
+            QRect(18, 432, self.width() - 36, 36),
             Qt.AlignmentFlag.AlignTop
             | Qt.AlignmentFlag.AlignLeft
             | Qt.TextFlag.TextWordWrap,

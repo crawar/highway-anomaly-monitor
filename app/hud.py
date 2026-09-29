@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QTimer, Qt
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -293,3 +293,134 @@ class ExitPopup(QWidget):
                 p.drawRoundedRect(QRectF(rect), 8.0, 8.0)
             p.setPen(T.POPUP_TEXT)
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, title)
+
+
+class FullscreenPrompt(QWidget):
+    """Ask before starting on the primary monitor. Times out into Continue."""
+
+    accepted = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(
+            parent,
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Window
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.NoDropShadowWindowHint,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedSize(360, 168)
+        self.setFont(_ui_font(13))
+        self.setMouseTracking(True)
+        self._seconds = 5
+        self._hover = ""
+        self._continue = QRect(24, 112, 148, 36)
+        self._close = QRect(188, 112, 148, 36)
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        apply_capture_affinity(self)
+
+    def hideEvent(self, event) -> None:
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def popup_near(self, anchor: QRect) -> None:
+        self._seconds = 5
+        self._hover = ""
+        x = anchor.center().x() - self.width() // 2
+        y = anchor.top() - self.height() - 8
+        self.move(_clamp_to_screen(QPoint(x, y), self.width(), self.height()))
+        self._timer.start()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.update()
+
+    def _tick(self) -> None:
+        if not self.isVisible():
+            self._timer.stop()
+            return
+        self._seconds -= 1
+        if self._seconds <= 0:
+            self._accept()
+            return
+        self.update()
+
+    def _accept(self) -> None:
+        self._timer.stop()
+        self.hide()
+        self.accepted.emit()
+
+    def _dismiss(self) -> None:
+        self._timer.stop()
+        self.hide()
+
+    def _hit(self, pos: QPoint) -> str:
+        if self._continue.contains(pos):
+            return "continue"
+        if self._close.contains(pos):
+            return "close"
+        return ""
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        hover = self._hit(event.position().toPoint())
+        if hover != self._hover:
+            self._hover = hover
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._hover:
+            self._hover = ""
+            self.update()
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            kind = self._hit(event.position().toPoint())
+            if kind == "continue":
+                self._accept()
+                event.accept()
+                return
+            if kind == "close":
+                self._dismiss()
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        body = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        _paint_metal_panel(p, body, 14.0)
+        p.setPen(T.SETTINGS_TEXT)
+        p.setFont(_ui_font(14))
+        p.drawText(
+            QRect(24, 28, self.width() - 48, 64),
+            Qt.AlignmentFlag.AlignHCenter
+            | Qt.AlignmentFlag.AlignVCenter
+            | Qt.TextFlag.TextWordWrap,
+            "未设置监测区域，将以全屏监测启动",
+        )
+        self._paint_button(p, self._continue, f"继续 ({self._seconds})", self._hover == "continue")
+        self._paint_button(p, self._close, "关闭", self._hover == "close")
+
+    def _paint_button(self, p: QPainter, rect: QRect, title: str, hover: bool) -> None:
+        body = QRectF(rect)
+        fill = QLinearGradient(body.topLeft(), body.bottomLeft())
+        if hover:
+            fill.setColorAt(0.0, QColor(92, 98, 108))
+            fill.setColorAt(1.0, QColor(38, 41, 46))
+        else:
+            fill.setColorAt(0.0, QColor(72, 76, 84))
+            fill.setColorAt(1.0, QColor(28, 30, 34))
+        p.setPen(QPen(T.WINDOW_RIM, 1.0))
+        p.setBrush(fill)
+        p.drawRoundedRect(body, 8.0, 8.0)
+        p.setPen(T.SETTINGS_TEXT)
+        p.setFont(_ui_font(13))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, title)

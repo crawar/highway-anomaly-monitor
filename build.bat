@@ -7,7 +7,7 @@ if /I "%~1"=="nopause" set "SKIP_PAUSE=1"
 set "PY=%~dp0.venv\Scripts\python.exe"
 set "WEIGHTS=%~dp0Download\yolo26l.pt"
 
-:: Version comes from app\__init__.py (VERSION = "V1.1.2"); the package folder
+:: Version comes from app\__init__.py (VERSION = "V1.2.0"); the package folder
 :: is dist\CarFind-<version> so several versions can sit side by side.
 set "VER="
 for /f "tokens=2 delims==" %%v in ('findstr /b /c:"VERSION" "%~dp0app\__init__.py"') do set "VER=%%v"
@@ -34,12 +34,6 @@ if not exist "%WEIGHTS%" (
     exit /b 1
 )
 
-if not exist "%~dp0config.json" (
-    echo Missing settings file: config.json
-    if not defined SKIP_PAUSE pause
-    exit /b 1
-)
-
 if not exist "%~dp0warning\Pwarning.wav" (
     echo Missing warning\Pwarning.wav
     if not defined SKIP_PAUSE pause
@@ -54,6 +48,12 @@ if not exist "%~dp0warning\Vwarning.wav" (
 
 if not exist "%~dp0warning\Rwarning.wav" (
     echo Missing warning\Rwarning.wav
+    if not defined SKIP_PAUSE pause
+    exit /b 1
+)
+
+if not exist "%~dp0warning\Bwarning.wav" (
+    echo Missing warning\Bwarning.wav
     if not defined SKIP_PAUSE pause
     exit /b 1
 )
@@ -87,7 +87,7 @@ if not exist "%OUT%\CarFind.exe" (
 )
 
 echo.
-echo Copying weights, settings, warning sounds, and Pic folder ...
+echo Copying weights, warning sounds, and Pic folder ...
 if not exist "%OUT%\Download" mkdir "%OUT%\Download"
 if not exist "%OUT%\warning" mkdir "%OUT%\warning"
 if not exist "%OUT%\Pic" mkdir "%OUT%\Pic"
@@ -101,16 +101,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-copy /Y "%~dp0config.json" "%OUT%\config.json" >nul
-if errorlevel 1 (
-    echo Failed to copy config.json
-    if not defined SKIP_PAUSE pause
-    exit /b 1
-)
-
 copy /Y "%~dp0warning\Pwarning.wav" "%OUT%\warning\Pwarning.wav" >nul
 copy /Y "%~dp0warning\Vwarning.wav" "%OUT%\warning\Vwarning.wav" >nul
 copy /Y "%~dp0warning\Rwarning.wav" "%OUT%\warning\Rwarning.wav" >nul
+copy /Y "%~dp0warning\Bwarning.wav" "%OUT%\warning\Bwarning.wav" >nul
 if errorlevel 1 (
     echo Failed to copy warning wav files
     if not defined SKIP_PAUSE pause
@@ -123,12 +117,12 @@ echo   %OUT%\CarFind.exe
 echo Folder contents include:
 echo   CarFind.exe
 echo   _internal\
-echo   config.json
 echo   Download\yolo26l.pt
 echo   warning\
 echo   Pic\
 echo   logs\   (diagnostic logs are written here at runtime)
 echo.
+echo config.json is not included. The program creates it beside the exe on first save.
 echo Copy the whole dist\%NAME% folder to another PC. Do not copy only the exe.
 if not defined SKIP_PAUSE pause
 exit /b 0

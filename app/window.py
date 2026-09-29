@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from app import VERSION, diag, theme as T
 from app.alerts import Alert, AlertEngine
 from app.buttons import MetalButton
-from app.hud import ExitPopup, MetalTip
+from app.hud import ExitPopup, FullscreenPrompt, MetalTip
 from app.list_ui import AlertListWindow
 from app.overlay import OverlayWindow
 from app.stats_ui import StatsWindow
@@ -99,7 +99,6 @@ class HomeWindow(QWidget):
         self._tip_btn: MetalButton | None = None
         self._alerting = False
         self._shot_cool = False
-        self._shot_kinds: frozenset[str] = frozenset()
         self._last_raise = 0.0
         self._startup_started = False
         self._startup_active = False
@@ -136,6 +135,8 @@ class HomeWindow(QWidget):
 
         self._tip = MetalTip(self)
         self._exit_popup = ExitPopup(self)
+        self._fullscreen_prompt = FullscreenPrompt(self)
+        self._fullscreen_prompt.accepted.connect(self._on_fullscreen_continue)
         self._tip_timer = QTimer(self)
         self._tip_timer.setSingleShot(True)
         self._tip_timer.setInterval(T.TIP_DELAY_MS)
@@ -327,8 +328,24 @@ class HomeWindow(QWidget):
             self._stop_running()
             return
         if self.monitor_region is None:
+            self._fullscreen_prompt.popup_near(self._capsule_global())
+            return
+        self._begin_running()
+
+    def _on_fullscreen_continue(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            log.warning("no primary screen; fullscreen start cancelled")
             self._prompt_select_region()
             return
+        self.monitor_region = QRect(screen.geometry())
+        log.info(
+            "fullscreen monitor region x=%d y=%d w=%d h=%d",
+            self.monitor_region.x(),
+            self.monitor_region.y(),
+            self.monitor_region.width(),
+            self.monitor_region.height(),
+        )
         self._begin_running()
 
     def _prompt_select_region(self) -> None:
@@ -352,7 +369,6 @@ class HomeWindow(QWidget):
         self._running = True
         self._alerting = False
         self._shot_cool = False
-        self._shot_kinds = frozenset()
         self._alert.reset()
         self._voice.stop()
         self.btn_play.set_toggled(True)
@@ -388,7 +404,6 @@ class HomeWindow(QWidget):
         self._running = False
         self._alerting = False
         self._shot_cool = False
-        self._shot_kinds = frozenset()
         self._cooldown.stop()
         self._detect_start.stop()
         self._voice.stop()
@@ -405,6 +420,7 @@ class HomeWindow(QWidget):
     def _on_settings_clicked(self) -> None:
         if self._running:
             return
+        self._fullscreen_prompt.hide()
         self._hide_tip()
         geo = QRect(self.mapToGlobal(QPoint(0, 0)), self.size())
         self._settings_panel.popup_above(geo)
@@ -417,6 +433,7 @@ class HomeWindow(QWidget):
         apply_capture_affinity(self._stats_panel)
         apply_capture_affinity(self._tip)
         apply_capture_affinity(self._exit_popup)
+        apply_capture_affinity(self._fullscreen_prompt)
         about = getattr(self._exit_popup, "_about", None)
         if about is not None:
             apply_capture_affinity(about)
@@ -447,9 +464,10 @@ class HomeWindow(QWidget):
         if alert.active != self._alerting:
             if alert.active:
                 log.info(
-                    "alert on kinds=%s parking=%d intrusion=%d detections=%d/%d",
+                    "alert on kinds=%s parking=%d congestion=%d intrusion=%d detections=%d/%d",
                     sorted(alert.kinds),
                     len(alert.parking),
+                    len(alert.congestion),
                     len(alert.intrusion),
                     len(parking),
                     len(intrusion),
@@ -475,11 +493,7 @@ class HomeWindow(QWidget):
         self._voice.update(None)
 
     def _should_save_shot(self, kinds: frozenset[str]) -> bool:
-        if not kinds:
-            return False
-        if not self._shot_cool:
-            return True
-        return kinds > self._shot_kinds
+        return bool(kinds) and not self._shot_cool
 
     def _save_alert_shot(self, alert: Alert, parking, intrusion, image_size, settings) -> bool:
         if self.monitor_region is None:
@@ -514,13 +528,11 @@ class HomeWindow(QWidget):
                 self._open_alert_image(path)
                 scheduled = True
         self._shot_cool = True
-        self._shot_kinds = alert.kinds
         self._cooldown.start(int(settings.cooldown_sec) * 1000)
         return scheduled
 
     def _on_cooldown_end(self) -> None:
         self._shot_cool = False
-        self._shot_kinds = frozenset()
 
     def _shutdown(self) -> None:
         if getattr(self, "_did_shutdown", False):
@@ -530,6 +542,7 @@ class HomeWindow(QWidget):
         self._stop_startup_effect()
         self._stop_idle_glint()
         self._detect_start.stop()
+        self._fullscreen_prompt.hide()
         self._list_panel.dismiss_peek()
         self._cooldown.stop()
         self._voice.stop()
@@ -548,6 +561,7 @@ class HomeWindow(QWidget):
     def _on_select_clicked(self) -> None:
         if self._running or self._picker is not None:
             return
+        self._fullscreen_prompt.hide()
         self._list_panel.dismiss_peek()
         self._hide_tip()
         self._list_panel.hide()
@@ -601,6 +615,7 @@ class HomeWindow(QWidget):
         if not self.isVisible() and self._picker is not None:
             return
         already_open = self._list_panel.isVisible() or self._stats_panel.isVisible()
+        self._fullscreen_prompt.hide()
         self._list_panel.dismiss_peek()
         self._hide_tip()
         self._settings_panel.hide()

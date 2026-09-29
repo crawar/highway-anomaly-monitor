@@ -10,7 +10,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QCursor
 
 from app import diag
-from app.paths import INTRUSION_WAV, PARKING_WAV, READY_WAV
+from app.paths import CONGESTION_WAV, INTRUSION_WAV, PARKING_WAV, READY_WAV
 
 log = diag.setup("ui")
 
@@ -22,6 +22,7 @@ _SND_NODEFAULT = 0x0002
 _KIND_PATH = {
     "intrusion": INTRUSION_WAV,
     "parking": PARKING_WAV,
+    "congestion": CONGESTION_WAV,
 }
 
 

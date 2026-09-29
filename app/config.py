@@ -21,6 +21,11 @@ def snap_cooldown(value: float) -> int:
     return int(min(steps, key=lambda step: abs(step - float(value))))
 
 
+def snap_congestion_count(value: float) -> int:
+    steps = T.CONGESTION_COUNT_STEPS
+    return int(min(steps, key=lambda step: abs(step - float(value))))
+
+
 def _debug_mode_from(data: dict[str, Any]) -> bool:
     if "debug_mode" in data:
         return bool(data.get("debug_mode"))
@@ -38,8 +43,10 @@ class AppSettings:
     intrusion_conf: float = T.DEFAULT_INTRUSION_CONF
     intrusion_alert: bool = True
     parking_alert: bool = True
+    congestion_alert: bool = True
+    congestion_count: int = T.DEFAULT_CONGESTION_COUNT
     voice_alert: bool = True
-    auto_open_image: bool = False
+    auto_open_image: bool = True
     gaze_guidance: bool = True
     cooldown_sec: int = T.DEFAULT_COOLDOWN
     parking_hold_sec: int = T.DEFAULT_PARKING_HOLD
@@ -63,6 +70,8 @@ class AppSettings:
         self.intrusion_conf = min(0.95, max(0.05, float(self.intrusion_conf)))
         self.intrusion_alert = bool(self.intrusion_alert)
         self.parking_alert = bool(self.parking_alert)
+        self.congestion_alert = bool(self.congestion_alert)
+        self.congestion_count = snap_congestion_count(self.congestion_count)
         self.voice_alert = bool(self.voice_alert)
         self.auto_open_image = bool(self.auto_open_image)
         self.gaze_guidance = bool(self.gaze_guidance)
@@ -103,8 +112,10 @@ def _from_dict(data: dict[str, Any]) -> AppSettings:
         intrusion_conf=data.get("intrusion_conf", T.DEFAULT_INTRUSION_CONF),
         intrusion_alert=data.get("intrusion_alert", True),
         parking_alert=data.get("parking_alert", True),
+        congestion_alert=data.get("congestion_alert", True),
+        congestion_count=data.get("congestion_count", T.DEFAULT_CONGESTION_COUNT),
         voice_alert=data.get("voice_alert", True),
-        auto_open_image=data.get("auto_open_image", False),
+        auto_open_image=data.get("auto_open_image", True),
         gaze_guidance=data.get("gaze_guidance", True),
         cooldown_sec=data.get("cooldown_sec", T.DEFAULT_COOLDOWN),
         parking_hold_sec=data.get("parking_hold_sec", T.DEFAULT_PARKING_HOLD),
