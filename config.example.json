@@ -7,7 +7,7 @@
   "intrusion_alert": true,
   "parking_alert": true,
   "congestion_alert": true,
-  "congestion_count": 10,
+  "congestion_count": 20,
   "voice_alert": true,
   "auto_open_image": true,
   "gaze_guidance": true,

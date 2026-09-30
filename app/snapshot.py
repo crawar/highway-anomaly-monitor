@@ -1,4 +1,4 @@
-"""Save a selected-region screenshot with alert boxes."""
+"""Save the detected frame with alert boxes drawn on it."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from PySide6.QtCore import QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
 from app import diag, theme as T
-from app.capture import ScreenGrabber
 from app.config import AppSettings
 from app.detect import LABELS_ZH
 from app.hud import _ui_font
@@ -104,32 +103,30 @@ def _draw_item(
 
 
 def save_alert_image(
-    region: QRect,
+    frame,
     items: list[dict],
     prefix: str,
-    image_size: tuple[int, int],
     settings: AppSettings | None = None,
     parking: list[dict] | None = None,
     intrusion: list[dict] | None = None,
 ) -> Path | None:
-    grabber = ScreenGrabber()
-    try:
-        bgr = grabber.grab(region)
-    finally:
-        grabber.close()
-    if bgr is None:
-        log.warning("alert snapshot: screen grab returned nothing for %s", region)
-        return None
-
     import numpy as np
 
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] < 3:
+        log.warning("alert snapshot: detection frame missing")
+        return None
+    bgr = np.ascontiguousarray(frame[:, :, :3])
+    if bgr.size == 0 or bgr.shape[0] < 2 or bgr.shape[1] < 2:
+        log.warning("alert snapshot: detection frame is empty")
+        return None
     rgb = np.ascontiguousarray(bgr[:, :, ::-1])
     h, w = rgb.shape[:2]
     image = QImage(rgb.data, w, h, rgb.strides[0], QImage.Format.Format_RGB888).copy()
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
     painter.setFont(_ui_font(11))
-    src = (max(1, int(image_size[0])), max(1, int(image_size[1])))
+    # Boxes are already in this frame's pixel space. Do not scale them.
+    src = (w, h)
     dst = (w, h)
     show_labels = bool(settings.show_labels) if settings is not None else False
     debug = bool(settings.debug_mode) if settings is not None else False

@@ -49,7 +49,6 @@ from app.sound import VoicePlayer
 from app.config import load_settings
 from app.win32util import (
     apply_capture_affinity,
-    capture_hidden,
     disable_system_rounding,
 )
 from app.weights import weights_ready
@@ -120,7 +119,7 @@ class HomeWindow(QWidget):
 
         # Buttons that fade out when collapsed; only play + collapse remain.
         self._mid_buttons = (self.btn_select, self.btn_list, self.btn_settings)
-        self._lock_buttons = (self.btn_select, self.btn_settings)
+        self._lock_buttons = (self.btn_select, self.btn_list, self.btn_settings)
         self._all_buttons = (
             self.btn_play,
             self.btn_select,
@@ -447,7 +446,7 @@ class HomeWindow(QWidget):
         if self._running:
             self._runtime.apply_settings(settings)
 
-    def _on_scene_ready(self, parking, intrusion, image_size, settings) -> None:
+    def _on_scene_ready(self, parking, intrusion, image_size, settings, frame=None) -> None:
         if not self._running or self.monitor_region is None:
             return
         self._overlay.set_region(self.monitor_region)
@@ -486,7 +485,7 @@ class HomeWindow(QWidget):
         if self._alerting:
             scheduled = False
             if self._should_save_shot(alert.kinds):
-                scheduled = self._save_alert_shot(alert, parking, intrusion, image_size, settings)
+                scheduled = self._save_alert_shot(alert, parking, intrusion, settings, frame)
             if not scheduled:
                 self._voice.update(alert.voice_kind if settings.voice_alert else None)
             return
@@ -495,19 +494,15 @@ class HomeWindow(QWidget):
     def _should_save_shot(self, kinds: frozenset[str]) -> bool:
         return bool(kinds) and not self._shot_cool
 
-    def _save_alert_shot(self, alert: Alert, parking, intrusion, image_size, settings) -> bool:
-        if self.monitor_region is None:
-            return False
-        with capture_hidden(self._overlay, self):
-            path = save_alert_image(
-                self.monitor_region,
-                alert.items,
-                alert.prefix,
-                image_size,
-                settings,
-                parking=parking,
-                intrusion=intrusion,
-            )
+    def _save_alert_shot(self, alert: Alert, parking, intrusion, settings, frame) -> bool:
+        path = save_alert_image(
+            frame,
+            alert.items,
+            alert.prefix,
+            settings,
+            parking=parking,
+            intrusion=intrusion,
+        )
         log.info(
             "alert snapshot kinds=%s items=%d path=%s cooldown=%ss",
             sorted(alert.kinds),
@@ -609,6 +604,8 @@ class HomeWindow(QWidget):
             app.setQuitOnLastWindowClosed(True)
 
     def _on_list_clicked(self) -> None:
+        if self._running:
+            return
         self._open_alert_list()
 
     def _open_alert_list(self) -> None:

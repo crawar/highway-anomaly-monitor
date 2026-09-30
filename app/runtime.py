@@ -43,7 +43,7 @@ def _offer(queue, payload) -> None:
 
 
 class DetectRuntime(QObject):
-    scene_ready = Signal(list, list, tuple, object)
+    scene_ready = Signal(list, list, tuple, object, object)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -55,6 +55,7 @@ class DetectRuntime(QObject):
         self._parking: list[dict] = []
         self._intrusion: list[dict] = []
         self._image_size = (1, 1)
+        self._frame = None
         self._frames = 0
         self._frame_errors = 0
         self._last_frame_at = 0.0
@@ -125,6 +126,7 @@ class DetectRuntime(QObject):
         self._active = False
         self._parking = []
         self._intrusion = []
+        self._frame = None
         _offer(self._ctrl_q, {"op": "stop"})
         self._flush_out()
 
@@ -137,12 +139,13 @@ class DetectRuntime(QObject):
             list(self._intrusion),
             self._image_size,
             settings,
+            self._frame,
         )
 
     def stop(self) -> None:
         """Stop inference but keep YOLO loaded until shutdown()."""
         self.pause()
-        self.scene_ready.emit([], [], self._image_size, load_settings())
+        self.scene_ready.emit([], [], self._image_size, load_settings(), None)
 
     def shutdown(self) -> None:
         log.info("runtime shutdown requested")
@@ -261,6 +264,7 @@ class DetectRuntime(QObject):
                 self._image_size = (max(1, int(size[0])), max(1, int(size[1])))
             self._parking = parking
             self._intrusion = intrusion
+            self._frame = msg.get("frame")
             self._frames += 1
             self._last_frame_at = time.monotonic()
             if msg.get("error"):
@@ -276,4 +280,5 @@ class DetectRuntime(QObject):
                 list(self._intrusion),
                 self._image_size,
                 load_settings(),
+                self._frame,
             )

@@ -7,7 +7,7 @@ if /I "%~1"=="nopause" set "SKIP_PAUSE=1"
 set "PY=%~dp0.venv\Scripts\python.exe"
 set "WEIGHTS=%~dp0Download\yolo26l.pt"
 
-:: Version comes from app\__init__.py (VERSION = "V1.2.0"); the package folder
+:: Version comes from app\__init__.py (VERSION = "V1.2.1"); the package folder
 :: is dist\CarFind-<version> so several versions can sit side by side.
 set "VER="
 for /f "tokens=2 delims==" %%v in ('findstr /b /c:"VERSION" "%~dp0app\__init__.py"') do set "VER=%%v"

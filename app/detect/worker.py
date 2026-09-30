@@ -331,10 +331,13 @@ def _run(weights: str, ctrl_q, out_q, log) -> str:
             try:
                 t_grab = time.perf_counter()
                 frame = _grab_bgr(sct, region)
+                # predict() may reuse the buffer. Keep the grabbed pixels so the
+                # saved alert image is exactly the frame YOLO scored.
+                detected = frame.copy()
                 t_infer = time.perf_counter()
-                h, w = frame.shape[:2]
+                h, w = detected.shape[:2]
                 results = model.predict(
-                    source=frame,
+                    source=detected,
                     classes=ids,
                     conf=0.05,
                     device="cpu",
@@ -349,6 +352,7 @@ def _run(weights: str, ctrl_q, out_q, log) -> str:
                         "parking": parking.split_items(items),
                         "intrusion": intrusion.split_items(items),
                         "image_size": (w, h),
+                        "frame": frame,
                     }
                 )
                 grab_ms = (t_infer - t_grab) * 1000.0
